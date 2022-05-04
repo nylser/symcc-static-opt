@@ -19,7 +19,8 @@
 #include <llvm/IR/ValueMap.h>
 #include <llvm/Pass.h>
 
-class SymbolizePass : public llvm::FunctionPass {
+class SymbolizePass : public llvm::FunctionPass
+{
 public:
   static char ID;
 
@@ -27,6 +28,7 @@ public:
 
   bool doInitialization(llvm::Module &M) override;
   bool runOnFunction(llvm::Function &F) override;
+  void getAnalysisUsage(llvm::AnalysisUsage &AU) const override;
 
 private:
   static constexpr char kSymCtorName[] = "__sym_ctor";
@@ -34,6 +36,8 @@ private:
   /// Mapping from global variables to their corresponding symbolic expressions.
   llvm::ValueMap<llvm::GlobalVariable *, llvm::GlobalVariable *>
       globalExpressions;
+
+  llvm::SmallVector<llvm::Function *, 0> clonedFunctions;
 };
 
 #endif

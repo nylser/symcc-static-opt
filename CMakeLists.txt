@@ -18,6 +18,18 @@ project(SymbolicCompiler)
 option(QSYM_BACKEND "Use the Qsym backend instead of our own" OFF)
 option(TARGET_32BIT "Make the compiler work correctly with -m32" OFF)
 
+if (EXISTS "${SVF_DIR}")
+else()
+    set(SVF_DIR $ENV{SVF_DIR})
+    if(EXISTS "${SVF_DIR}")
+    else()
+    message(FATAL_ERROR "\
+WARNING: The SVF_DIR var was not set (required for an out-of-source build)!\n\
+Please set this to environment variable to point to the SVF_DIR directory or set this variable to cmake configuration\n
+(e.g. on linux: export SVF_DIR=/path/to/SVF/dir) \n or \n \n(make the project via: cmake -DSVF_DIR=your_path_to_SVF) ")
+    endif()
+endif()
+
 # We need to build the runtime as an external project because CMake otherwise
 # doesn't allow us to build it twice with different options (one 32-bit version
 # and one 64-bit variant).
@@ -41,7 +53,7 @@ set(SYM_RUNTIME_BUILD_ARGS
   -DCMAKE_SYSROOT=${CMAKE_SYSROOT}
   -DQSYM_BACKEND=${QSYM_BACKEND}
   -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-  -DZ3_TRUST_SYSTEM_VERSION=${Z3_TRUST_SYSTEM_VERSION})
+  -DZ3_TRUST_SYSTEM_VERSION=TRUE)
 
 ExternalProject_Add(SymRuntime
   SOURCE_DIR ${CMAKE_SOURCE_DIR}/runtime
@@ -52,6 +64,12 @@ ExternalProject_Add(SymRuntime
   -DLLVM_DIR=${LLVM_DIR}
   INSTALL_COMMAND ""
   BUILD_ALWAYS TRUE)
+
+
+set(SVF_LIB "/usr/local/lib/libSvf.a")
+set(LLVMCudd "/usr/local/lib/libCudd.a")
+set(SVF_HEADER "/usr/local/include/svf")
+include_directories(${SVF_HEADER})
 
 ExternalProject_Get_Property(SymRuntime BINARY_DIR)
 set(SYM_RUNTIME_DIR ${BINARY_DIR})
@@ -88,10 +106,29 @@ include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 \
 -Wredundant-decls -Wcast-align -Wmissing-include-dirs -Wswitch-default \
 -Wextra -Wall -Winvalid-pch -Wredundant-decls -Wformat=2 \
--Wmissing-format-attribute -Wformat-nonliteral -Werror")
+-Wmissing-format-attribute -Wformat-nonliteral ")
 
 # Mark nodelete to work around unload bug in upstream LLVM 5.0+
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -Wl,-z,nodelete")
+
+
+find_package(Z3 4 CONFIG)
+if (NOT Z3_FOUND)
+  if (NOT Z3_TRUST_SYSTEM_VERSION)
+    message(FATAL_ERROR "Couldn't locate Z3. \
+If you want me to trust that a suitable version is available nonetheless, \
+configure CMake with -DZ3_TRUST_SYSTEM_VERSION=on (see also docs/Configuration.txt).")
+  else()
+    if (EXISTS "/usr/include/z3")
+      set(Z3_C_INCLUDE_DIRS "/usr/include/z3")
+    else()
+      set(Z3_C_INCLUDE_DIRS)
+    endif()
+    set(Z3_LIBRARIES "z3")
+  endif()
+endif()
+
+llvm_map_components_to_libnames(llvm_libs bitwriter core ipo irreader instcombine instrumentation target linker analysis scalaropts support )
 
 # This is the compiler pass that we later load into clang or opt. If LLVM is
 # built without RTTI we have to disable it for our library too, otherwise we'll
@@ -100,7 +137,13 @@ add_library(Symbolize MODULE
   compiler/Symbolizer.cpp
   compiler/Pass.cpp
   compiler/Runtime.cpp
-  compiler/Main.cpp)
+  compiler/Main.cpp
+  compiler/analyze/AnalyzePass.cpp)
+target_link_libraries(Symbolize ${SVF_LIB} ${LLVMCudd})
+target_link_libraries(Symbolize ${Z3_LIBRARIES})
+
+
+
 if (NOT LLVM_ENABLE_RTTI)
   set_target_properties(Symbolize PROPERTIES COMPILE_FLAGS "-fno-rtti")
 endif()

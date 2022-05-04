@@ -16,14 +16,18 @@
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 
 #include "Pass.h"
+#include "analyze/AnalyzePass.h"
 
 void addSymbolizePass(const llvm::PassManagerBuilder & /* unused */,
-                      llvm::legacy::PassManagerBase &PM) {
-  PM.add(new SymbolizePass());
+                      llvm::legacy::PassManagerBase &PM)
+{
+    PM.add(new AnalyzePass());
+    PM.add(new SymbolizePass());
 }
 
-// Make the pass known to opt.
+// Make the passes known to opt.
 static llvm::RegisterPass<SymbolizePass> X("symbolize", "Symbolization Pass");
+static llvm::RegisterPass<AnalyzePass> X1("analyze", "Analyze Pass");
 // Tell frontends to run the pass automatically.
 static struct llvm::RegisterStandardPasses
     Y(llvm::PassManagerBuilder::EP_VectorizerStart, addSymbolizePass);

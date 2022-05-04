@@ -1,0 +1,13 @@
+{
+    "image": "symcc_compile",
+    "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        //"twxs.cmake",
+        "ms-vscode.cmake-tools"
+    ],
+    "mounts": [
+        "source=/Users/korbinian/dev-learning/rust/,target=/workspaces/ruststuff/,type=bind,consistency=cached",
+        "source=/Users/korbinian/dev/llvm_libcxx/,target=/workspaces/llvm/,type=bind,consistency=cached",
+    ]
+}
