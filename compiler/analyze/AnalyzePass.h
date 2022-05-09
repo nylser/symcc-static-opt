@@ -6,6 +6,8 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Pass.h>
 
+#include "Graphs/SVFG.h"
+
 class AnalyzePass : public llvm::FunctionPass
 {
 public:
@@ -15,9 +17,14 @@ public:
 
     bool doInitialization(llvm::Module &M) override;
     bool runOnFunction(llvm::Function &F) override;
+    bool doFinalization(llvm::Module &M) override;
 
     llvm::ValueMap<llvm::BasicBlock *, std::string *> *getFunctionAnalysisData(llvm::Function &F);
 
 private:
+    llvm::Value *traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value);
+
     llvm::ValueMap<llvm::Function *, llvm::ValueMap<llvm::BasicBlock *, std::string *> *> functionAnalysisData;
+    SVF::SVFG *svfg;
+    SVF::VFG *vfg;
 };
