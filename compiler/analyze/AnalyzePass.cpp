@@ -1,7 +1,5 @@
 #include "AnalyzePass.h"
 
-#include <llvm/ADT/SmallSet.h>
-#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/User.h>
 #include <llvm/Support/raw_ostream.h>
@@ -106,93 +104,112 @@ void traverseOnVFG(const SVFG *vfg, Value *val) {
   }
 }
 
-bool AnalyzePass::runOnFunction(Function &F) {
-  if (F.getName() != "a") {
-    return false;
-  }
-  errs() << "getting function: " << F.getName() << "\n";
-  /*for (Argument &A : F.args())
-  {
-      if (A.user_empty())
-      {
-          continue;
-      }
-      errs() << "getting arg" << A << "\n";
-      for (User *U : A.users())
-      {
-          if (auto I = dyn_cast<Instruction>(U))
-          {
-              errs() << "  Inst:" << *I << "\n";
-          }
-          else
-          {
-              errs() << " User:" << U->getName() << "\n";
-          }
-      }
-  }*/
+bool AnalyzePass::runOnModule(Module &M) {
+  for (Function &F : M.getFunctionList()) {
+    FunctionAnalysisData *data = &functionAnalysisData[&F];
+    errs() << "getting function: " << F.getName() << "\n";
+    for (BasicBlock &B : F)
 
-  for (BasicBlock &B : F)
-
-  /**
-   * @brief For each basic block I want to get the most simplified and
-   * summarized values that need to be concreteness-checked. This means on each
-   * used operand for instructions such as add, div, mul needs to be checked
-   * with the value-flow tree But as we want to check it for this basic block,
-   * we basically need to find the first dependency that is defined in the same
-   * function outside the basic block or still inside said basic block?
-   */
-  {
-    ValueMap<Value *, llvm::SmallVector<Value *, 0> *> VMap;
-    SmallSet<Value *, 8> BasicBlockDeps;
-    errs() << B.getName() << "\n";
-    for (Instruction &I : B) {
-
-      llvm::SmallVector<Value *, 0> operands;
-      for (Use &U : I.operands()) {
-        if (dyn_cast<BasicBlock>(U.get())) {
+    /**
+     * @brief For each basic block I want to get the most simplified and
+     * summarized values that need to be concreteness-checked. This means on
+     * each used operand for instructions such as add, div, mul needs to be
+     * checked with the value-flow tree But as we want to check it for this
+     * basic block, we basically need to find the first dependency that is
+     * defined in the same function outside the basic block or still inside said
+     * basic block?
+     */
+    {
+      SmallSet<Value *, 8> basicBlockDeps;
+      errs() << B.getName() << "\n";
+      for (Instruction &I : B) {
+        if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
+          basicBlockDeps.insert(&I);
           continue;
         }
-        operands.push_back(U.get());
-        BasicBlockDeps.insert(U.get()); // collect all operands
+
+        if (auto *storeInst = dyn_cast<StoreInst>(&I)) {
+          // for the store instruction, only the value that is stored actually
+          // matters?
+          basicBlockDeps.insert(storeInst->getOperand(0));
+          continue;
+        }
+
+        for (Use &U : I.operands()) {
+          if (dyn_cast<BasicBlock>(U.get()) || dyn_cast<Constant>(U.get())) {
+            continue;
+          }
+          basicBlockDeps.insert(U.get()); // collect all operands
+        }
       }
-      VMap.insert(std::make_pair(&I, &operands));
+
+      llvm::SmallSet<const Value *, 8> basicBlockTopLevelDeps;
+      for (Value *Dep : basicBlockDeps) {
+        auto topLevel = traversePredecessors(B, Dep);
+        valueDependencies.insert(std::make_pair(Dep, topLevel));
+        basicBlockTopLevelDeps.insert(topLevel.begin(), topLevel.end());
+        // errs() << *Dep << "\n";
+      }
+
+      std::list<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
+
+      for (auto *topLevelDep : basicBlockTopLevelDeps) {
+        topLevelDepsList->push_back(topLevelDep);
+        errs() << "Dep: " << *topLevelDep << "\n";
+      }
     }
 
-    for (Value *Dep : BasicBlockDeps) {
-      traversePredecessors(B, Dep);
-      // errs() << *Dep << "\n";
-    }
-    // errs() << "getting BasicBlock" << B << "\n";
+    errs() << "EndOfFunction\n\n";
   }
 
-  errs() << "EndOfFunction\n\n";
   return false;
 }
 
 const SVF::PAGNode *getLHSTopLevPtr(const VFGNode *);
 
-llvm::Value *AnalyzePass::traversePredecessors(llvm::BasicBlock &BB,
-                                               llvm::Value *Value) {
-
+llvm::SmallSet<const llvm::Value *, 8>
+AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
+  auto it = valueDependencies.find(Value);
+  if (it != valueDependencies.end()) {
+    errs() << "short circuit!\n";
+    return it->second;
+  }
+  llvm::SmallSet<const llvm::Value *, 8> topLevel;
   SVF::PAG *pag = PAG::getPAG();
-
+  SVF::FIFOWorkList<const VFGNode *> worklist;
+  if (dyn_cast<Constant>(Value)) {
+    return topLevel;
+  }
   SVF::PAGNode *pNode = pag->getPAGNode(pag->getValueNode(Value));
   const VFGNode *vNode = svfg->getDefSVFGNode(pNode);
+  worklist.push(vNode);
 
-  errs() << "Value: " << *Value << "\n";
-  for (auto *edge : vNode->getInEdges()) {
-    const VFGNode *node = edge->getSrcNode();
-    auto *someNode = getLHSTopLevPtr(node);
-    if (someNode == nullptr) {
-      continue;
+  while (!worklist.empty()) {
+    auto *currentNode = worklist.pop();
+    auto *pagNode = getLHSTopLevPtr(currentNode);
+    if (pagNode != nullptr) {
+      const llvm::Value *nodeValue = pagNode->getValue();
+      if (auto *param = dyn_cast<llvm::Argument>(nodeValue)) {
+        topLevel.insert(param);
+        continue;
+      }
+      if (auto *inst = dyn_cast<llvm::Instruction>(nodeValue)) {
+        if (auto *alloca = dyn_cast<llvm::AllocaInst>(inst)) {
+          // TODO: skip alloca instructions => pointers are always concretized?
+          continue;
+        }
+        if (inst->getParent() != &BB) {
+          topLevel.insert(inst);
+          continue;
+        }
+      }
     }
-    const llvm::Value *val = someNode->getValue();
-    errs() << "Edge: " << *edge->getSrcNode() << "\n";
-    errs() << "In Value: " << *val << "\n";
-  }
-  errs() << "\n";
 
-  return Value;
+    for (auto *edge : currentNode->getInEdges()) {
+      worklist.push(edge->getSrcNode());
+    }
+  }
+  return topLevel;
 }
 
 /*!
@@ -236,7 +253,9 @@ const SVF::PAGNode *getLHSTopLevPtr(const VFGNode *node) {
   return nullptr;
 }
 
-llvm::ValueMap<llvm::BasicBlock *, std::string *> *
-AnalyzePass::getFunctionAnalysisData(Function &F) {
-  return functionAnalysisData.lookup(&F);
+FunctionAnalysisData *AnalyzePass::getFunctionAnalysisData(Function &F) {
+  auto it = functionAnalysisData.find(&F);
+  if (it == functionAnalysisData.end())
+    return nullptr;
+  return &it->second;
 }

@@ -1,30 +1,44 @@
-#include <llvm/IR/Module.h>
-#include <llvm/IR/ValueMap.h>
-#include <llvm/IR/Function.h>
+#include <llvm/ADT/SmallSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/Instruction.h>
+#include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
+#include <llvm/IR/ValueMap.h>
 #include <llvm/Pass.h>
 
+#pragma clang diagnostic push
 #include "Graphs/SVFG.h"
+#pragma clang diagnostic pop
 
-class AnalyzePass : public llvm::FunctionPass
-{
+class FunctionAnalysisData {
+
 public:
-    static char ID;
+  FunctionAnalysisData() {}
+  std::map<llvm::BasicBlock *, std::list<const llvm::Value *>> basicBlockData;
+};
 
-    AnalyzePass() : FunctionPass(ID) {}
+class AnalyzePass : public llvm::ModulePass {
+public:
+  static char ID;
 
-    bool doInitialization(llvm::Module &M) override;
-    bool runOnFunction(llvm::Function &F) override;
-    bool doFinalization(llvm::Module &M) override;
+  AnalyzePass() : ModulePass(ID) {}
 
-    llvm::ValueMap<llvm::BasicBlock *, std::string *> *getFunctionAnalysisData(llvm::Function &F);
+  bool doInitialization(llvm::Module &M) override;
+  bool runOnModule(llvm::Module &M) override;
+  bool doFinalization(llvm::Module &M) override;
+
+  FunctionAnalysisData *getFunctionAnalysisData(llvm::Function &F);
 
 private:
-    llvm::Value *traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value);
+  llvm::SmallSet<const llvm::Value *, 8>
+  traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value);
 
-    llvm::ValueMap<llvm::Function *, llvm::ValueMap<llvm::BasicBlock *, std::string *> *> functionAnalysisData;
-    SVF::SVFG *svfg;
-    SVF::VFG *vfg;
+  llvm::ValueMap<llvm::Value *, llvm::SmallSet<const llvm::Value *, 8>>
+      valueDependencies;
+
+  llvm::ValueMap<llvm::Function *, FunctionAnalysisData> functionAnalysisData;
+  SVF::SVFG *svfg;
+  SVF::VFG *vfg;
 };
