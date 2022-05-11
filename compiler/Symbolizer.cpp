@@ -20,6 +20,7 @@
 #include <llvm/IR/GetElementPtrTypeIterator.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 #include "Runtime.h"
 
@@ -31,11 +32,15 @@ void Symbolizer::symbolizeFunctionArguments(Function &F) {
     return;
 
   IRBuilder<> IRB(F.getEntryBlock().getFirstNonPHI());
-
+  CallInst *lastInst;
   for (auto &arg : F.args()) {
-    if (!arg.user_empty())
-      symbolicExpressions[&arg] = IRB.CreateCall(runtime.getParameterExpression,
-                                                 IRB.getInt8(arg.getArgNo()));
+    if (!arg.user_empty()) {
+      lastInst = IRB.CreateCall(runtime.getParameterExpression,
+                                IRB.getInt8(arg.getArgNo()));
+      symbolicExpressions[&arg] = lastInst;
+      errs() << " Symbolized argument " << symbolicExpressions[&arg]->getName()
+             << "\n";
+    }
   }
 }
 
@@ -94,6 +99,9 @@ void Symbolizer::shortCircuitExpressionUses() {
     for (const auto &input : symbolicComputation.inputs) {
       nullChecks.push_back(
           IRB.CreateICmpEQ(nullExpression, input.getSymbolicOperand()));
+      // errs() << " Inserting concreteness null check for " <<
+      // input.concreteValue->getName() << " (ID: " <<
+      // input.concreteValue->getValueID() << ")\n";
     }
     auto *allConcrete = nullChecks[0];
     for (unsigned argIndex = 1; argIndex < nullChecks.size(); argIndex++) {
@@ -174,6 +182,167 @@ void Symbolizer::shortCircuitExpressionUses() {
           symbolicComputation.lastInstruction->getParent());
     }
   }
+}
+
+BasicBlock *
+Symbolizer::insertBasicBlockCheck(BasicBlock &B,
+                                  std::list<const Value *> &dependencies) {
+  /**
+   * @brief we need to generate a concreteness check for all the given
+   * dependencies. Question is: we're running before the symbolification => so
+   * except for the function arguments (which are symbolized beforehand) there
+   * are no symbolic values in this function. Maybe we need to run the
+   * symbolification for each preceding basic block before inserting the check.
+   *
+   * Otherwise we might be unnecessarily generating symbolic values? Not sure
+   * yet.
+   *
+   */
+  IRBuilder<> IRB(&*B.getFirstInsertionPt());
+
+  auto *nullExpression = ConstantPointerNull::get(IRB.getInt8PtrTy());
+  std::vector<Value *> nullChecks;
+  std::vector<Value *> valueExprList;
+
+  /// get symbolic-valueExpr for all dependencies
+  for (auto dep : dependencies) {
+    /// @todo this is very unclean and I don't like it. Is there a way to
+    /// get rid of the const? or do we need to propagate it through symcc
+
+    Value *nonConstDep = const_cast<Value *>(dep);
+
+    /// @todo Think about StoreInst and LoadInst!
+    auto valueExpr = getSymbolicExpression(nonConstDep);
+    if (valueExpr == nullptr) {
+      errs() << "no symExpression for " << *dep << " yet!\n";
+      continue;
+    }
+    // assert(valueExpr != nullptr && "there is no valueExpr yet!");
+    valueExprList.push_back(valueExpr);
+  }
+
+  std::set<Value *> valueExprSet;
+  valueExprSet.insert(valueExprList.begin(), valueExprList.end());
+  // valueExprToGo.push_back(valueExprList.begin(), valueExprList.end());
+  for (auto &inst : B.getInstList()) {
+    if (valueExprSet.size() == 0) {
+      IRB.SetInsertPoint(&inst);
+      break;
+    }
+    if (valueExprSet.find(&inst) != valueExprSet.end())
+      valueExprSet.erase(&inst);
+  }
+  for (auto valueExpr : valueExprList) {
+    nullChecks.push_back(IRB.CreateICmpEQ(nullExpression, valueExpr));
+  }
+  if (nullChecks.size() == 0) {
+    return nullptr;
+  }
+
+  auto *allConcrete = nullChecks[0];
+  for (unsigned argIndex = 1; argIndex < nullChecks.size(); argIndex++) {
+    allConcrete = IRB.CreateAnd(allConcrete, nullChecks[argIndex]);
+  }
+
+  auto splitLocation = &*IRB.GetInsertPoint();
+  auto symbolizedBlock = SplitBlock(&B, splitLocation, nullptr, nullptr,
+                                    nullptr, B.getName() + ".symbolized");
+  ValueToValueMapTy VMap;
+  // TODO: Update references, phi nodes, ETC.
+  auto easyBlock = CloneBasicBlock(symbolizedBlock, VMap, "", B.getParent());
+  easyBlock->setName(B.getName() + ".easy");
+  easyBlock->moveAfter(&B);
+
+  // updating inner references?
+  for (auto &inst : easyBlock->getInstList()) {
+    unsigned int operandIdx = 0;
+    for (auto &operand : inst.operands()) {
+      if (auto *value = operand.get(); value != nullptr) {
+        if (auto mappedValue = VMap.find(value); mappedValue != VMap.end()) {
+          inst.setOperand(operandIdx, mappedValue->second);
+        }
+      }
+      operandIdx += 1;
+    }
+  }
+
+  BranchInst *branchInst =
+      BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
+  ReplaceInstWithInst(B.getTerminator(), branchInst);
+
+  auto mergeBlock =
+      BasicBlock::Create(B.getContext(), B.getName() + ".merge", B.getParent(),
+                         symbolizedBlock->getNextNode());
+  IRB.SetInsertPoint(mergeBlock);
+
+  // create PHINodes for all mappings in the node
+  ValueMap<Value *, PHINode *> newMappings;
+  for (auto value : VMap) {
+    if (value->first->getType()->isVoidTy()) {
+      continue;
+    }
+    auto originalValue = const_cast<Value *>(value.first);
+    auto clonedValue = value.second;
+    PHINode *phiNode = IRB.CreatePHI(originalValue->getType(), 2,
+                                     originalValue->getName() + ".merge");
+    phiNode->addIncoming(originalValue, symbolizedBlock);
+    phiNode->addIncoming(clonedValue, easyBlock);
+    newMappings.insert(std::make_pair(originalValue, phiNode));
+  }
+
+  // replace uses of old values with new PHINodes
+  for (auto value : newMappings) {
+    value->first->replaceUsesWithIf(value->second, [&](Use &U) {
+      if (U.getUser() == value->second) {
+        return false;
+      }
+      if (auto inst = dyn_cast<Instruction>(U.getUser())) {
+        return inst->getParent() != symbolizedBlock;
+      }
+      return true;
+    });
+
+    // Fix incoming references in PHINodes
+    for (auto *user : value->second->users()) {
+      if (auto phiNode = dyn_cast<PHINode>(user)) {
+        phiNode->replaceIncomingBlockWith(symbolizedBlock, mergeBlock);
+      }
+    }
+  }
+
+  auto symTerminator = symbolizedBlock->getTerminator();
+  auto easyTerminator = easyBlock->getTerminator();
+
+  if (auto returnInst = dyn_cast<ReturnInst>(symTerminator)) {
+    errs() << "getting return inst\n";
+    mergeBlock->removeFromParent();
+    return symbolizedBlock;
+  }
+  ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
+  symTerminator->removeFromParent();
+
+  // replace operators in terminator!
+  for (auto &operand : symTerminator->operands()) {
+    if (auto mapping = newMappings.find(operand.get());
+        mapping != newMappings.end()) {
+      symTerminator->setOperand(operand.getOperandNo(), mapping->second);
+    }
+  }
+  mergeBlock->getInstList().push_back(symTerminator);
+  symbolizedBlock->getInstList().push_back(BranchInst::Create(mergeBlock));
+
+  return symbolizedBlock;
+}
+
+void Symbolizer::postProcessBasicBlockCheck(BasicBlock &B) {
+  auto *mergeBlock = B.getSingleSuccessor();
+  if (mergeBlock == nullptr) {
+    return;
+  }
+
+  for (auto &inst : B.getInstList()) {
+  }
+  errs() << *mergeBlock << "\n";
 }
 
 void Symbolizer::handleIntrinsicCall(CallBase &I) {
@@ -758,7 +927,9 @@ void Symbolizer::visitInsertValueInst(InsertValueInst &I) {
        {IRB.getInt64(aggregateMemberOffset(I.getAggregateOperand()->getType(),
                                            I.getIndices())),
         false},
-       {IRB.getInt8(isLittleEndian(I.getInsertedValueOperand()->getType()) ? 1 : 0), false}});
+       {IRB.getInt8(isLittleEndian(I.getInsertedValueOperand()->getType()) ? 1
+                                                                           : 0),
+        false}});
   registerSymbolicComputation(insert, &I);
 }
 

@@ -18,20 +18,19 @@
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
 
-#include "analyze/AnalyzePass.h"
 #include "Runtime.h"
 #include "Symbolizer.h"
+#include "analyze/AnalyzePass.h"
 
 using namespace llvm;
 
 #ifndef NDEBUG
-#define DEBUG(X) \
-  do             \
-  {              \
-    X;           \
+#define DEBUG(X)                                                               \
+  do {                                                                         \
+    X;                                                                         \
   } while (false)
 #else
 #define DEBUG(X) ((void)0)
@@ -39,14 +38,12 @@ using namespace llvm;
 
 char SymbolizePass::ID = 0;
 
-bool SymbolizePass::doInitialization(Module &M)
-{
+bool SymbolizePass::doInitialization(Module &M) {
   DEBUG(errs() << "Symbolizer module init\n");
 
   // Redirect calls to external functions to the corresponding wrappers and
   // rename internal functions.
-  for (auto &function : M.functions())
-  {
+  for (auto &function : M.functions()) {
     auto name = function.getName();
     if (isInterceptedFunction(function))
       function.setName(name + "_symbolized");
@@ -61,8 +58,7 @@ bool SymbolizePass::doInitialization(Module &M)
   return true;
 }
 
-bool SymbolizePass::runOnFunction(Function &F)
-{
+bool SymbolizePass::runOnFunction(Function &F) {
   auto functionName = F.getName();
   if (functionName == kSymCtorName)
     return false;
@@ -78,28 +74,52 @@ bool SymbolizePass::runOnFunction(Function &F)
   Symbolizer symbolizer(*F.getParent());
   symbolizer.symbolizeFunctionArguments(F);
 
-  for (auto &basicBlock : F)
-  {
+  AnalyzePass &pass = getAnalysis<AnalyzePass>();
+  FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
+  assert(data != nullptr && "Analysis data is missing!");
+
+  for (auto &basicBlock : F) {
     // errs() << basicBlock.getName() << "\n";
     symbolizer.insertBasicBlockNotification(basicBlock);
   }
-
-  for (auto *instPtr : allInstructions)
-  {
+  BasicBlock *currentBlock = nullptr;
+  BasicBlock *insertedBlock = nullptr;
+  for (auto *instPtr : allInstructions) {
+    if (currentBlock != instPtr->getParent()) {
+      if (instPtr->getParent() == insertedBlock) {
+        errs() << "skipping insertedBlock\n";
+        continue;
+      }
+      // errs() << "instPtr Parent" << *(instPtr->getParent()) << "\n";
+      auto it = data->basicBlockData.find(instPtr->getParent());
+      // assert(it != data->basicBlockData.end() &&
+      //        "Analysis data for block is missing!");
+      if (it == data->basicBlockData.end())
+        continue;
+      insertedBlock =
+          symbolizer.insertBasicBlockCheck(*instPtr->getParent(), it->second);
+      if (currentBlock != nullptr) {
+        symbolizer.postProcessBasicBlockCheck(*currentBlock);
+      }
+      currentBlock = instPtr->getParent();
+    }
     symbolizer.visit(instPtr);
+  }
+  if (currentBlock != nullptr) {
+    symbolizer.postProcessBasicBlockCheck(*currentBlock);
   }
 
   symbolizer.finalizePHINodes();
-  symbolizer.shortCircuitExpressionUses();
+  // symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
-  //  assert(!verifyFunction(F, &errs()) &&
-  //         "SymbolizePass produced invalid bitcode");
+  verifyFunction(F, &errs());
+  // assert(!verifyFunction(F, &errs()) &&
+  //        "SymbolizePass produced invalid bitcode");
 
   return true;
 }
 
-void SymbolizePass::getAnalysisUsage(AnalysisUsage &AU) const
-{
+void SymbolizePass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AnalyzePass>();
 }

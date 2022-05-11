@@ -15,6 +15,7 @@
 #ifndef SYMBOLIZE_H
 #define SYMBOLIZE_H
 
+#include <list>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstVisitor.h>
@@ -94,6 +95,11 @@ public:
   /// The resulting code is much longer but avoids solver calls for all
   /// operations without symbolic data.
   void shortCircuitExpressionUses();
+
+  llvm::BasicBlock *
+  insertBasicBlockCheck(llvm::BasicBlock &B,
+                        std::list<const llvm::Value *> &dependencies);
+  void postProcessBasicBlockCheck(llvm::BasicBlock &B);
 
   void handleIntrinsicCall(llvm::CallBase &I);
   void handleInlineAssembly(llvm::CallInst &I);
