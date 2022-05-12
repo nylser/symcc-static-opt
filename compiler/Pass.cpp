@@ -67,6 +67,11 @@ bool SymbolizePass::runOnFunction(Function &F) {
   // DEBUG(errs().write_escaped(functionName) << '\n');
 
   SmallVector<Instruction *, 0> allInstructions;
+  SmallVector<BasicBlock *, 0> allBasicBlocks;
+  allBasicBlocks.reserve(F.getBasicBlockList().size());
+  for (auto &B : F.getBasicBlockList()) {
+    allBasicBlocks.push_back(&B);
+  }
   allInstructions.reserve(F.getInstructionCount());
   for (auto &I : instructions(F))
     allInstructions.push_back(&I);
@@ -78,35 +83,45 @@ bool SymbolizePass::runOnFunction(Function &F) {
   FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
   assert(data != nullptr && "Analysis data is missing!");
 
-  for (auto &basicBlock : F) {
-    // errs() << basicBlock.getName() << "\n";
-    symbolizer.insertBasicBlockNotification(basicBlock);
-  }
-  BasicBlock *currentBlock = nullptr;
-  BasicBlock *insertedBlock = nullptr;
-  for (auto *instPtr : allInstructions) {
-    if (currentBlock != instPtr->getParent()) {
-      if (instPtr->getParent() == insertedBlock) {
-        errs() << "skipping insertedBlock\n";
-        continue;
+  ValueMap<BasicBlock *, std::tuple<BasicBlock *, ValueToValueMapTy *>>
+      cloneData;
+
+  for (auto basicBlock : allBasicBlocks) {
+    ValueToValueMapTy *VMap = new ValueToValueMapTy();
+    auto clonedBlock = CloneBasicBlock(basicBlock, *VMap, ".easy", &F);
+    // updating inner references
+    for (auto &inst : clonedBlock->getInstList()) {
+      for (auto &operand : inst.operands()) {
+        if (auto *value = operand.get(); value != nullptr) {
+          if (auto mappedValue = VMap->find(value);
+              mappedValue != VMap->end()) {
+            inst.setOperand(operand.getOperandNo(), mappedValue->second);
+          }
+        }
       }
-      // errs() << "instPtr Parent" << *(instPtr->getParent()) << "\n";
-      auto it = data->basicBlockData.find(instPtr->getParent());
-      // assert(it != data->basicBlockData.end() &&
-      //        "Analysis data for block is missing!");
-      if (it == data->basicBlockData.end())
-        continue;
-      insertedBlock =
-          symbolizer.insertBasicBlockCheck(*instPtr->getParent(), it->second);
-      if (currentBlock != nullptr) {
-        symbolizer.postProcessBasicBlockCheck(*currentBlock);
-      }
-      currentBlock = instPtr->getParent();
     }
+    clonedBlock->moveAfter(basicBlock);
+    cloneData.insert(
+        std::make_pair(basicBlock, std::make_tuple<>(clonedBlock, VMap)));
+    symbolizer.insertBasicBlockNotification(*basicBlock);
+  }
+  for (auto *instPtr : allInstructions) {
     symbolizer.visit(instPtr);
   }
-  if (currentBlock != nullptr) {
-    symbolizer.postProcessBasicBlockCheck(*currentBlock);
+  for (auto *currentBlock : allBasicBlocks) {
+
+    // errs() << "instPtr Parent" << *(instPtr->getParent()) << "\n";
+    auto dependencies = data->basicBlockData.find(currentBlock);
+    // assert(it != data->basicBlockData.end() &&
+    //        "Analysis data for block is missing!");
+    if (dependencies == data->basicBlockData.end())
+      assert("stuff");
+
+    auto clonedBlockData = cloneData.find(currentBlock);
+    assert(clonedBlockData != cloneData.end() && "Cloned block data missing!");
+    symbolizer.insertBasicBlockCheck(
+        *currentBlock, *std::get<0>(clonedBlockData->second),
+        *std::get<1>(clonedBlockData->second), dependencies->second);
   }
 
   symbolizer.finalizePHINodes();

@@ -21,6 +21,7 @@
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/ValueMap.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/Utils/ValueMapper.h>
 #include <optional>
 
 #include "Runtime.h"
@@ -97,7 +98,8 @@ public:
   void shortCircuitExpressionUses();
 
   llvm::BasicBlock *
-  insertBasicBlockCheck(llvm::BasicBlock &B,
+  insertBasicBlockCheck(llvm::BasicBlock &B, llvm::BasicBlock &easyBlock,
+                        llvm::ValueToValueMapTy &VMap,
                         std::list<const llvm::Value *> &dependencies);
   void postProcessBasicBlockCheck(llvm::BasicBlock &B);
 

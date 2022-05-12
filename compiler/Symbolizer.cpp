@@ -185,7 +185,8 @@ void Symbolizer::shortCircuitExpressionUses() {
 }
 
 BasicBlock *
-Symbolizer::insertBasicBlockCheck(BasicBlock &B,
+Symbolizer::insertBasicBlockCheck(BasicBlock &B, BasicBlock &easyBlock,
+                                  ValueToValueMapTy &VMap,
                                   std::list<const Value *> &dependencies) {
   /**
    * @brief we need to generate a concreteness check for all the given
@@ -247,27 +248,9 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B,
   auto splitLocation = &*IRB.GetInsertPoint();
   auto symbolizedBlock = SplitBlock(&B, splitLocation, nullptr, nullptr,
                                     nullptr, B.getName() + ".symbolized");
-  ValueToValueMapTy VMap;
-  // TODO: Update references, phi nodes, ETC.
-  auto easyBlock = CloneBasicBlock(symbolizedBlock, VMap, "", B.getParent());
-  easyBlock->setName(B.getName() + ".easy");
-  easyBlock->moveAfter(&B);
-
-  // updating inner references?
-  for (auto &inst : easyBlock->getInstList()) {
-    unsigned int operandIdx = 0;
-    for (auto &operand : inst.operands()) {
-      if (auto *value = operand.get(); value != nullptr) {
-        if (auto mappedValue = VMap.find(value); mappedValue != VMap.end()) {
-          inst.setOperand(operandIdx, mappedValue->second);
-        }
-      }
-      operandIdx += 1;
-    }
-  }
 
   BranchInst *branchInst =
-      BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
+      BranchInst::Create(symbolizedBlock, &easyBlock, allConcrete);
   ReplaceInstWithInst(B.getTerminator(), branchInst);
 
   auto mergeBlock =
@@ -278,6 +261,10 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B,
   // create PHINodes for all mappings in the node
   ValueMap<Value *, PHINode *> newMappings;
   for (auto value : VMap) {
+
+    errs() << "map from: " << *value->first << "\n";
+    errs() << "map to: " << *value->second << "\n";
+
     if (value->first->getType()->isVoidTy()) {
       continue;
     }
@@ -286,7 +273,7 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B,
     PHINode *phiNode = IRB.CreatePHI(originalValue->getType(), 2,
                                      originalValue->getName() + ".merge");
     phiNode->addIncoming(originalValue, symbolizedBlock);
-    phiNode->addIncoming(clonedValue, easyBlock);
+    phiNode->addIncoming(clonedValue, &easyBlock);
     newMappings.insert(std::make_pair(originalValue, phiNode));
   }
 
@@ -311,7 +298,7 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B,
   }
 
   auto symTerminator = symbolizedBlock->getTerminator();
-  auto easyTerminator = easyBlock->getTerminator();
+  auto easyTerminator = easyBlock.getTerminator();
 
   if (auto returnInst = dyn_cast<ReturnInst>(symTerminator)) {
     errs() << "getting return inst\n";
