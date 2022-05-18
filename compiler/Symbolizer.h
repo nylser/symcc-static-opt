@@ -26,6 +26,29 @@
 
 #include "Runtime.h"
 
+class SplitData {
+public:
+  SplitData(llvm::BasicBlock *checkBlock, llvm::BasicBlock *easyBlock,
+            llvm::BasicBlock *symbolizedBlock, llvm::BasicBlock *mergeBlock,
+            llvm::ValueToValueMapTy *VMap)
+      : m_checkBlock(checkBlock), m_easyBlock(easyBlock),
+        m_symbolizedBlock(symbolizedBlock), m_mergeBlock(mergeBlock),
+        m_VMap(VMap){};
+
+  llvm::BasicBlock *getCheckBlock();
+  llvm::BasicBlock *getEasyBlock();
+  llvm::BasicBlock *getSymbolizedBlock();
+  llvm::BasicBlock *getMergeBlock();
+  llvm::ValueToValueMapTy *getVMap();
+
+private:
+  llvm::BasicBlock *m_checkBlock;
+  llvm::BasicBlock *m_symbolizedBlock;
+  llvm::BasicBlock *m_easyBlock;
+  llvm::BasicBlock *m_mergeBlock;
+  llvm::ValueToValueMapTy *m_VMap;
+};
+
 class Symbolizer : public llvm::InstVisitor<Symbolizer> {
 public:
   explicit Symbolizer(llvm::Module &M)
@@ -97,10 +120,11 @@ public:
   /// operations without symbolic data.
   void shortCircuitExpressionUses();
 
-  llvm::BasicBlock *
-  insertBasicBlockCheck(llvm::BasicBlock &B, llvm::BasicBlock &easyBlock,
-                        llvm::ValueToValueMapTy &VMap,
-                        std::list<const llvm::Value *> &dependencies);
+  void insertBasicBlockCheck(
+      llvm::BasicBlock &B, SplitData &splitData,
+      std::list<const llvm::Value *> &dependencies,
+      llvm::ValueMap<llvm::Instruction *, llvm::Instruction *> &symbolicMerges);
+  SplitData splitIntoBlocks(llvm::BasicBlock &B);
   void postProcessBasicBlockCheck(llvm::BasicBlock &B);
 
   void handleIntrinsicCall(llvm::CallBase &I);
@@ -143,6 +167,7 @@ public:
 private:
   static constexpr unsigned kExpectedMaxPHINodesPerFunction = 16;
   static constexpr unsigned kExpectedSymbolicArgumentsPerComputation = 2;
+  llvm::Instruction *firstEntryBlockInstruction;
 
   /// A symbolic input.
   struct Input {

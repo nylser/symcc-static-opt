@@ -26,8 +26,15 @@
 
 using namespace llvm;
 
+BasicBlock *SplitData::getCheckBlock() { return m_checkBlock; }
+BasicBlock *SplitData::getEasyBlock() { return m_easyBlock; }
+BasicBlock *SplitData::getSymbolizedBlock() { return m_symbolizedBlock; }
+BasicBlock *SplitData::getMergeBlock() { return m_mergeBlock; }
+ValueToValueMapTy *SplitData::getVMap() { return m_VMap; }
+
 void Symbolizer::symbolizeFunctionArguments(Function &F) {
   // The main function doesn't receive symbolic arguments.
+  firstEntryBlockInstruction = nullptr;
   if (F.getName() == "main")
     return;
 
@@ -42,6 +49,7 @@ void Symbolizer::symbolizeFunctionArguments(Function &F) {
              << "\n";
     }
   }
+  firstEntryBlockInstruction = lastInst;
 }
 
 void Symbolizer::insertBasicBlockNotification(llvm::BasicBlock &B) {
@@ -184,10 +192,49 @@ void Symbolizer::shortCircuitExpressionUses() {
   }
 }
 
-BasicBlock *
-Symbolizer::insertBasicBlockCheck(BasicBlock &B, BasicBlock &easyBlock,
-                                  ValueToValueMapTy &VMap,
-                                  std::list<const Value *> &dependencies) {
+SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
+  auto splitLocation = B.getFirstNonPHI();
+  if (&B.getParent()->getEntryBlock() == &B &&
+      firstEntryBlockInstruction != nullptr &&
+      firstEntryBlockInstruction->getParent() == &B) {
+    splitLocation = firstEntryBlockInstruction->getNextNode();
+    errs() << *firstEntryBlockInstruction->getNextNode() << " Split!"
+           << "\n";
+    errs() << B.getParent()->getEntryBlock() << "\n";
+  }
+  assert(splitLocation != nullptr && "SplitLocation needs to exist!");
+  auto symbolizedBlock = SplitBlock(&B, splitLocation);
+  ValueToValueMapTy *VMap = new ValueToValueMapTy();
+  auto easyBlock =
+      CloneBasicBlock(symbolizedBlock, *VMap, ".easy", B.getParent());
+  // updating inner references
+  for (auto &inst : easyBlock->getInstList()) {
+    for (auto &operand : inst.operands()) {
+      if (auto *value = operand.get(); value != nullptr) {
+        if (auto mappedValue = VMap->find(value); mappedValue != VMap->end()) {
+          inst.setOperand(operand.getOperandNo(), mappedValue->second);
+        }
+      }
+    }
+  }
+  easyBlock->setName(B.getName() + ".easy");
+  symbolizedBlock->setName(B.getName() + ".symbolized");
+  easyBlock->moveAfter(&B);
+  auto mergeBlock = BasicBlock::Create(B.getContext(), B.getName() + ".merge",
+                                       B.getParent(), B.getSingleSuccessor());
+  auto symTerminator = symbolizedBlock->getTerminator();
+  symTerminator->removeFromParent();
+  mergeBlock->getInstList().push_back(symTerminator);
+  BranchInst::Create(mergeBlock, symbolizedBlock);
+  ReplaceInstWithInst(easyBlock->getTerminator(),
+                      BranchInst::Create(mergeBlock));
+
+  return SplitData(&B, easyBlock, symbolizedBlock, mergeBlock, VMap);
+}
+
+void Symbolizer::insertBasicBlockCheck(
+    BasicBlock &B, SplitData &splitData, std::list<const Value *> &dependencies,
+    ValueMap<Instruction *, Instruction *> &symbolicMerges) {
   /**
    * @brief we need to generate a concreteness check for all the given
    * dependencies. Question is: we're running before the symbolification => so
@@ -236,8 +283,16 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B, BasicBlock &easyBlock,
   for (auto valueExpr : valueExprList) {
     nullChecks.push_back(IRB.CreateICmpEQ(nullExpression, valueExpr));
   }
+  errs() << "getting references\n";
+  auto symbolizedBlock = splitData.getSymbolizedBlock();
+  auto mergeBlock = splitData.getMergeBlock();
+  auto easyBlock = splitData.getEasyBlock();
+  /// here, we don't have any nullChecks?
+  /// Does that mean there are no deps? -> no need to symbolize?
+  /// for now, we just keep on branching to the symbolized block.
   if (nullChecks.size() == 0) {
-    return nullptr;
+    // mergeBlock->dropAllReferences();
+    return;
   }
 
   auto *allConcrete = nullChecks[0];
@@ -245,22 +300,15 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B, BasicBlock &easyBlock,
     allConcrete = IRB.CreateAnd(allConcrete, nullChecks[argIndex]);
   }
 
-  auto splitLocation = &*IRB.GetInsertPoint();
-  auto symbolizedBlock = SplitBlock(&B, splitLocation, nullptr, nullptr,
-                                    nullptr, B.getName() + ".symbolized");
-
   BranchInst *branchInst =
-      BranchInst::Create(symbolizedBlock, &easyBlock, allConcrete);
+      BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
   ReplaceInstWithInst(B.getTerminator(), branchInst);
 
-  auto mergeBlock =
-      BasicBlock::Create(B.getContext(), B.getName() + ".merge", B.getParent(),
-                         symbolizedBlock->getNextNode());
-  IRB.SetInsertPoint(mergeBlock);
-
+  IRB.SetInsertPoint(mergeBlock->getFirstNonPHI());
+  auto VMap = splitData.getVMap();
   // create PHINodes for all mappings in the node
   ValueMap<Value *, PHINode *> newMappings;
-  for (auto value : VMap) {
+  for (auto value : *VMap) {
 
     errs() << "map from: " << *value->first << "\n";
     errs() << "map to: " << *value->second << "\n";
@@ -273,8 +321,20 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B, BasicBlock &easyBlock,
     PHINode *phiNode = IRB.CreatePHI(originalValue->getType(), 2,
                                      originalValue->getName() + ".merge");
     phiNode->addIncoming(originalValue, symbolizedBlock);
-    phiNode->addIncoming(clonedValue, &easyBlock);
+    phiNode->addIncoming(clonedValue, easyBlock);
     newMappings.insert(std::make_pair(originalValue, phiNode));
+  }
+  // also create phi nodes for possible used symbolic expressions?
+  for (auto &inst : symbolizedBlock->getInstList()) {
+    if (VMap->find(&inst) == VMap->end() &&
+        &inst != symbolizedBlock->getTerminator() &&
+        inst.getType() == nullExpression->getType()) {
+      errs() << "got new value: " << inst << "\n";
+      PHINode *phiNode = IRB.CreatePHI(inst.getType(), 2, "symmerge");
+      phiNode->addIncoming(&inst, symbolizedBlock);
+      phiNode->addIncoming(nullExpression, easyBlock);
+      symbolicMerges.insert(std::make_pair(&inst, phiNode));
+    }
   }
 
   // replace uses of old values with new PHINodes
@@ -297,28 +357,24 @@ Symbolizer::insertBasicBlockCheck(BasicBlock &B, BasicBlock &easyBlock,
     }
   }
 
-  auto symTerminator = symbolizedBlock->getTerminator();
-  auto easyTerminator = easyBlock.getTerminator();
-
-  if (auto returnInst = dyn_cast<ReturnInst>(symTerminator)) {
+  /*if (auto returnInst = dyn_cast<ReturnInst>(symTerminator)) {
     errs() << "getting return inst\n";
     mergeBlock->removeFromParent();
     return symbolizedBlock;
+  }*/
+  auto mergeTerminator = mergeBlock->getTerminator();
+  if (mergeTerminator == nullptr) {
+    errs() << "no terminator!!" << '\n';
+    errs() << *mergeBlock << "\n";
+    return;
   }
-  ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
-  symTerminator->removeFromParent();
-
   // replace operators in terminator!
-  for (auto &operand : symTerminator->operands()) {
+  for (auto &operand : mergeTerminator->operands()) {
     if (auto mapping = newMappings.find(operand.get());
         mapping != newMappings.end()) {
-      symTerminator->setOperand(operand.getOperandNo(), mapping->second);
+      mergeTerminator->setOperand(operand.getOperandNo(), mapping->second);
     }
   }
-  mergeBlock->getInstList().push_back(symTerminator);
-  symbolizedBlock->getInstList().push_back(BranchInst::Create(mergeBlock));
-
-  return symbolizedBlock;
 }
 
 void Symbolizer::postProcessBasicBlockCheck(BasicBlock &B) {

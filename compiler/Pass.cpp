@@ -15,9 +15,11 @@
 #include "Pass.h"
 
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
@@ -83,31 +85,19 @@ bool SymbolizePass::runOnFunction(Function &F) {
   FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
   assert(data != nullptr && "Analysis data is missing!");
 
-  ValueMap<BasicBlock *, std::tuple<BasicBlock *, ValueToValueMapTy *>>
-      cloneData;
+  ValueMap<BasicBlock *, SplitData> cloneData;
 
   for (auto basicBlock : allBasicBlocks) {
-    ValueToValueMapTy *VMap = new ValueToValueMapTy();
-    auto clonedBlock = CloneBasicBlock(basicBlock, *VMap, ".easy", &F);
-    // updating inner references
-    for (auto &inst : clonedBlock->getInstList()) {
-      for (auto &operand : inst.operands()) {
-        if (auto *value = operand.get(); value != nullptr) {
-          if (auto mappedValue = VMap->find(value);
-              mappedValue != VMap->end()) {
-            inst.setOperand(operand.getOperandNo(), mappedValue->second);
-          }
-        }
-      }
-    }
-    clonedBlock->moveAfter(basicBlock);
-    cloneData.insert(
-        std::make_pair(basicBlock, std::make_tuple<>(clonedBlock, VMap)));
-    symbolizer.insertBasicBlockNotification(*basicBlock);
+    auto data = symbolizer.splitIntoBlocks(*basicBlock);
+    cloneData.insert(std::make_pair(basicBlock, data));
+    symbolizer.insertBasicBlockNotification(*data.getSymbolizedBlock());
   }
   for (auto *instPtr : allInstructions) {
     symbolizer.visit(instPtr);
   }
+
+  ValueMap<Instruction *, Instruction *> symbolicMerges;
+
   for (auto *currentBlock : allBasicBlocks) {
 
     // errs() << "instPtr Parent" << *(instPtr->getParent()) << "\n";
@@ -119,9 +109,69 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     auto clonedBlockData = cloneData.find(currentBlock);
     assert(clonedBlockData != cloneData.end() && "Cloned block data missing!");
-    symbolizer.insertBasicBlockCheck(
-        *currentBlock, *std::get<0>(clonedBlockData->second),
-        *std::get<1>(clonedBlockData->second), dependencies->second);
+    symbolizer.insertBasicBlockCheck(*currentBlock, clonedBlockData->second,
+                                     dependencies->second, symbolicMerges);
+  }
+
+  // Replace uses of PHINodes
+  auto nullExpression =
+      ConstantPointerNull::get(PointerType::getInt8PtrTy(F.getContext()));
+  for (auto value : symbolicMerges) {
+    auto originalValue = value->first;
+    auto phiNode = value->second;
+    originalValue->replaceUsesWithIf(phiNode, [&](Use &U) {
+      if (U.getUser() == phiNode) {
+        return false;
+      }
+      if (auto inst = dyn_cast<Instruction>(U.getUser())) {
+        return inst->getParent() != originalValue->getParent();
+      }
+      return true;
+    });
+    /// Fix symmerge PHINodes only coming in from specific branches
+    /// -> Create PHINodes that cover all branches
+    ValueMap<BasicBlock *, PHINode *> createdNodes;
+    for (auto user : phiNode->users()) {
+      auto inst = dyn_cast<Instruction>(user);
+      PHINode *newPhiNode = nullptr;
+      if (inst == phiNode || inst->getParent() == phiNode->getParent() ||
+          !inst) {
+        continue;
+      }
+      auto it = createdNodes.find(inst->getParent());
+      if (it == createdNodes.end()) {
+        // basic block doesnt already have "remerge-node"
+        for (auto pred : predecessors(inst->getParent())) {
+          if (pred == phiNode->getParent()) {
+            continue;
+          }
+          if (newPhiNode == nullptr) {
+            newPhiNode = PHINode::Create(phiNode->getType(), 0);
+            newPhiNode->addIncoming(phiNode, phiNode->getParent());
+          }
+          newPhiNode->addIncoming(nullExpression, pred);
+        }
+        if (newPhiNode != nullptr) {
+          newPhiNode->insertBefore(inst->getParent()->getFirstNonPHI());
+        }
+        createdNodes.insert(std::make_pair(inst->getParent(), newPhiNode));
+      } else
+        newPhiNode = it->second;
+
+      if (newPhiNode != nullptr) {
+        for (auto &operand : inst->operands()) {
+          if (operand.get() == phiNode) {
+            inst->setOperand(operand.getOperandNo(), newPhiNode);
+          }
+        }
+      }
+    }
+  }
+
+  for (auto *currentBlock : allBasicBlocks) {
+    auto clonedBlockData = cloneData.find(currentBlock);
+    assert(clonedBlockData != cloneData.end() && "Cloned block data missing!");
+    auto easyBlock = (clonedBlockData->second).getEasyBlock();
   }
 
   symbolizer.finalizePHINodes();
