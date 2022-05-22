@@ -16,6 +16,7 @@
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -82,6 +83,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
   symbolizer.symbolizeFunctionArguments(F);
 
   AnalyzePass &pass = getAnalysis<AnalyzePass>();
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
   assert(data != nullptr && "Analysis data is missing!");
 
@@ -131,11 +133,15 @@ bool SymbolizePass::runOnFunction(Function &F) {
     /// Fix symmerge PHINodes only coming in from specific branches
     /// -> Create PHINodes that cover all branches
     ValueMap<BasicBlock *, PHINode *> createdNodes;
-    for (auto user : phiNode->users()) {
-      auto inst = dyn_cast<Instruction>(user);
+    for (auto &use : phiNode->uses()) {
+      auto inst = dyn_cast<Instruction>(use.getUser());
       PHINode *newPhiNode = nullptr;
       if (inst == phiNode || inst->getParent() == phiNode->getParent() ||
           !inst) {
+        continue;
+      }
+      if (DT.dominates(phiNode, use)) {
+        errs() << "phiNode " << *phiNode << " dominates " << &use << "\n";
         continue;
       }
       auto it = createdNodes.find(inst->getParent());
@@ -178,13 +184,14 @@ bool SymbolizePass::runOnFunction(Function &F) {
   // symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
-  verifyFunction(F, &errs());
-  // assert(!verifyFunction(F, &errs()) &&
-  //        "SymbolizePass produced invalid bitcode");
+  //  verifyFunction(F, &errs());
+  assert(!verifyFunction(F, &errs()) &&
+         "SymbolizePass produced invalid bitcode");
 
   return true;
 }
 
 void SymbolizePass::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<DominatorTreeWrapperPass>();
   AU.addRequired<AnalyzePass>();
 }

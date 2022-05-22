@@ -198,9 +198,9 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
       firstEntryBlockInstruction != nullptr &&
       firstEntryBlockInstruction->getParent() == &B) {
     splitLocation = firstEntryBlockInstruction->getNextNode();
-    errs() << *firstEntryBlockInstruction->getNextNode() << " Split!"
-           << "\n";
-    errs() << B.getParent()->getEntryBlock() << "\n";
+    // errs() << *firstEntryBlockInstruction->getNextNode() << " Split!"
+    //        << "\n";
+    // errs() << B.getParent()->getEntryBlock() << "\n";
   }
   assert(splitLocation != nullptr && "SplitLocation needs to exist!");
   auto symbolizedBlock = SplitBlock(&B, splitLocation);
@@ -283,7 +283,7 @@ void Symbolizer::insertBasicBlockCheck(
   for (auto valueExpr : valueExprList) {
     nullChecks.push_back(IRB.CreateICmpEQ(nullExpression, valueExpr));
   }
-  errs() << "getting references\n";
+  // errs() << "getting references\n";
   auto symbolizedBlock = splitData.getSymbolizedBlock();
   auto mergeBlock = splitData.getMergeBlock();
   auto easyBlock = splitData.getEasyBlock();
@@ -310,8 +310,8 @@ void Symbolizer::insertBasicBlockCheck(
   ValueMap<Value *, PHINode *> newMappings;
   for (auto value : *VMap) {
 
-    errs() << "map from: " << *value->first << "\n";
-    errs() << "map to: " << *value->second << "\n";
+    // errs() << "map from: " << *value->first << "\n";
+    // errs() << "map to: " << *value->second << "\n";
 
     if (value->first->getType()->isVoidTy()) {
       continue;
@@ -329,7 +329,7 @@ void Symbolizer::insertBasicBlockCheck(
     if (VMap->find(&inst) == VMap->end() &&
         &inst != symbolizedBlock->getTerminator() &&
         inst.getType() == nullExpression->getType()) {
-      errs() << "got new value: " << inst << "\n";
+      // errs() << "got new value: " << inst << "\n";
       PHINode *phiNode = IRB.CreatePHI(inst.getType(), 2, "symmerge");
       phiNode->addIncoming(&inst, symbolizedBlock);
       phiNode->addIncoming(nullExpression, easyBlock);
@@ -385,7 +385,7 @@ void Symbolizer::postProcessBasicBlockCheck(BasicBlock &B) {
 
   for (auto &inst : B.getInstList()) {
   }
-  errs() << *mergeBlock << "\n";
+  // errs() << *mergeBlock << "\n";
 }
 
 void Symbolizer::handleIntrinsicCall(CallBase &I) {
