@@ -87,13 +87,14 @@ bool SymbolizePass::runOnFunction(Function &F) {
   FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
   assert(data != nullptr && "Analysis data is missing!");
 
-  ValueMap<BasicBlock *, SplitData> cloneData;
+  ValueMap<BasicBlock *, SplitData> splitData;
 
   for (auto basicBlock : allBasicBlocks) {
     auto data = symbolizer.splitIntoBlocks(*basicBlock);
-    cloneData.insert(std::make_pair(basicBlock, data));
+    splitData.insert(std::make_pair(basicBlock, data));
     symbolizer.insertBasicBlockNotification(*data.getSymbolizedBlock());
   }
+
   for (auto *instPtr : allInstructions) {
     symbolizer.visit(instPtr);
   }
@@ -106,11 +107,17 @@ bool SymbolizePass::runOnFunction(Function &F) {
     auto dependencies = data->basicBlockData.find(currentBlock);
     // assert(it != data->basicBlockData.end() &&
     //        "Analysis data for block is missing!");
-    if (dependencies == data->basicBlockData.end())
-      assert("stuff");
+    assert(dependencies != data->basicBlockData.end() &&
+           "Dependencies for block are non-existant");
 
-    auto clonedBlockData = cloneData.find(currentBlock);
-    assert(clonedBlockData != cloneData.end() && "Cloned block data missing!");
+    auto clonedBlockData = splitData.find(currentBlock);
+
+    for (auto *instPtr : clonedBlockData->second.storesToInstrument) {
+      errs() << "instrumenting store in easy block " << *instPtr << "\n";
+      symbolizer.visitStore(*instPtr);
+    }
+
+    assert(clonedBlockData != splitData.end() && "Cloned block data missing!");
     symbolizer.insertBasicBlockCheck(*currentBlock, clonedBlockData->second,
                                      dependencies->second, symbolicMerges);
   }
@@ -175,18 +182,20 @@ bool SymbolizePass::runOnFunction(Function &F) {
   }
 
   for (auto *currentBlock : allBasicBlocks) {
-    auto clonedBlockData = cloneData.find(currentBlock);
-    assert(clonedBlockData != cloneData.end() && "Cloned block data missing!");
+    auto clonedBlockData = splitData.find(currentBlock);
+    assert(clonedBlockData != splitData.end() && "Cloned block data missing!");
     auto easyBlock = (clonedBlockData->second).getEasyBlock();
   }
 
   symbolizer.finalizePHINodes();
+
+  // TODO: do we still need this?
   // symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
-  //  verifyFunction(F, &errs());
-  assert(!verifyFunction(F, &errs()) &&
-         "SymbolizePass produced invalid bitcode");
+  verifyFunction(F, &errs());
+  // assert(!verifyFunction(F, &errs()) &&
+  //        "SymbolizePass produced invalid bitcode");
 
   return true;
 }

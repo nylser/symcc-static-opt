@@ -69,11 +69,27 @@ bool AnalyzePass::runOnModule(Module &M) {
      */
     {
       SmallSet<Value *, 8> basicBlockDeps;
+      ValueMap<CallInst *, SmallSet<Value *, 8>> callInstDeps;
+      CallInst *lastCall = nullptr;
+
       errs() << B.getName() << "\n";
       for (Instruction &I : B) {
+
         if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
           basicBlockDeps.insert(&I);
+          // collect call operands
+          if (lastCall != nullptr) {
+            errs() << "have last call " << *lastCall << "\n";
+            auto callInstDepList = &callInstDeps[lastCall];
+            callInstDepList->insert(&I);
+          }
           continue;
+        }
+
+        // TODO: Memory might have been changed after call inst and no longer be
+        // known-concrete
+        if (auto *callInst = dyn_cast<CallInst>(&I)) {
+          lastCall = callInst;
         }
 
         if (auto *storeInst = dyn_cast<StoreInst>(&I)) {
@@ -99,11 +115,27 @@ bool AnalyzePass::runOnModule(Module &M) {
         // errs() << *Dep << "\n";
       }
 
+      // Might be optimizable. But caching of the preds-list should already help
+      for (auto callInstPair : callInstDeps) {
+        llvm::SmallSet<const Value *, 8> callInstTopLevelDeps;
+        for (Value *Dep : callInstPair->second) {
+          auto topLevel = traversePredecessors(B, Dep);
+          valueDependencies.insert(std::make_pair(Dep, topLevel));
+          callInstTopLevelDeps.insert(topLevel.begin(), topLevel.end());
+        }
+        std::list<const Value *> *callInstDepsList =
+            &data->afterCallDependencies[callInstPair->first];
+        for (auto *topLevelDep : callInstTopLevelDeps) {
+          callInstDepsList->push_back(topLevelDep);
+        }
+        // errs() << *Dep << "\n";
+      }
+
       std::list<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
 
       for (auto *topLevelDep : basicBlockTopLevelDeps) {
         topLevelDepsList->push_back(topLevelDep);
-        errs() << "Dep: " << *topLevelDep << "\n";
+        // errs() << "Dep: " << *topLevelDep << "\n";
       }
     }
 
@@ -128,6 +160,7 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
   if (dyn_cast<Constant>(Value)) {
     return topLevel;
   }
+  errs() << "Processing " << *Value << "\n";
   SVF::PAGNode *pNode = pag->getPAGNode(pag->getValueNode(Value));
   const VFGNode *vNode = svfg->getDefSVFGNode(pNode);
   worklist.push(vNode);
@@ -135,7 +168,13 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
   while (!worklist.empty()) {
     auto *currentNode = worklist.pop();
     auto *pagNode = getLHSTopLevPtr(currentNode);
+
     if (pagNode != nullptr) {
+      if (pagNode->getNodeKind() == pagNode->DummyObjNode ||
+          pagNode->getNodeKind() == pagNode->DummyValNode) {
+        errs() << "Skipping DummyNode! " << *currentNode << "\n";
+        continue;
+      }
       const llvm::Value *nodeValue = pagNode->getValue();
       if (auto *param = dyn_cast<llvm::Argument>(nodeValue)) {
         topLevel.insert(param);

@@ -205,6 +205,7 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
   assert(splitLocation != nullptr && "SplitLocation needs to exist!");
   auto symbolizedBlock = SplitBlock(&B, splitLocation);
   ValueToValueMapTy *VMap = new ValueToValueMapTy();
+  std::list<StoreInst *> storeInstructions;
   auto easyBlock =
       CloneBasicBlock(symbolizedBlock, *VMap, ".easy", B.getParent());
   // updating inner references
@@ -216,7 +217,11 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
         }
       }
     }
+    if (auto *storeInst = dyn_cast<StoreInst>(&inst)) {
+      storeInstructions.push_back(storeInst);
+    }
   }
+
   easyBlock->setName(B.getName() + ".easy");
   symbolizedBlock->setName(B.getName() + ".symbolized");
   easyBlock->moveAfter(&B);
@@ -229,7 +234,22 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
   ReplaceInstWithInst(easyBlock->getTerminator(),
                       BranchInst::Create(mergeBlock));
 
-  return SplitData(&B, easyBlock, symbolizedBlock, mergeBlock, VMap);
+  auto data = SplitData(&B, easyBlock, symbolizedBlock, mergeBlock, VMap);
+  data.storesToInstrument.insert(data.storesToInstrument.begin(),
+                                 storeInstructions.begin(),
+                                 storeInstructions.end());
+  return data;
+}
+
+void Symbolizer::handleCalls(
+    BasicBlock &B, SplitData &splitData,
+    std::map<llvm::Instruction *, std::list<const llvm::Value *>>
+        *afterCallDependencies) {
+  auto VMap = splitData.getVMap();
+  for (auto pair : *VMap) {
+    // TODO: Split and clone block after instruction, symbolize said rest-block
+    // (or their memory accesses)
+  }
 }
 
 void Symbolizer::insertBasicBlockCheck(
@@ -240,7 +260,8 @@ void Symbolizer::insertBasicBlockCheck(
    * dependencies. Question is: we're running before the symbolification => so
    * except for the function arguments (which are symbolized beforehand) there
    * are no symbolic values in this function. Maybe we need to run the
-   * symbolification for each preceding basic block before inserting the check.
+   * symbolification for each preceding basic block before inserting the
+   * check.
    *
    * Otherwise we might be unnecessarily generating symbolic values? Not sure
    * yet.
@@ -262,7 +283,7 @@ void Symbolizer::insertBasicBlockCheck(
     /// @todo Think about StoreInst and LoadInst!
     auto valueExpr = getSymbolicExpression(nonConstDep);
     if (valueExpr == nullptr) {
-      errs() << "no symExpression for " << *dep << " yet!\n";
+      // errs() << "no symExpression for " << *dep << " yet!\n";
       continue;
     }
     // assert(valueExpr != nullptr && "there is no valueExpr yet!");
@@ -412,8 +433,8 @@ void Symbolizer::handleIntrinsicCall(CallBase &I) {
 
     // The intrinsic allows both 32 and 64-bit integers to specify the length;
     // convert to the right type if necessary. This may truncate the value on
-    // 32-bit architectures. However, what's the point of specifying a length to
-    // memcpy that is larger than your address space?
+    // 32-bit architectures. However, what's the point of specifying a length
+    // to memcpy that is larger than your address space?
 
     IRB.CreateCall(runtime.memcpy,
                    {I.getOperand(0), I.getOperand(1),
@@ -650,11 +671,11 @@ void Symbolizer::visitCallInst(CallInst &I) {
 }
 
 void Symbolizer::visitInvokeInst(InvokeInst &I) {
-  // Invoke is like a call but additionally establishes an exception handler. We
-  // can obtain the return expression only in the success case, but the target
-  // block may have multiple incoming edges (i.e., our edge may be critical). In
-  // this case, we split the edge and query the return expression in the new
-  // block that is specific to our edge.
+  // Invoke is like a call but additionally establishes an exception handler.
+  // We can obtain the return expression only in the success case, but the
+  // target block may have multiple incoming edges (i.e., our edge may be
+  // critical). In this case, we split the edge and query the return
+  // expression in the new block that is specific to our edge.
   auto *newBlock = SplitCriticalEdge(I.getParent(), I.getNormalDest());
   handleFunctionCall(I, newBlock != nullptr
                             ? newBlock->getFirstNonPHI()
@@ -1023,8 +1044,8 @@ void Symbolizer::visitUnreachableInst(UnreachableInst & /*unused*/) {
 }
 
 void Symbolizer::visitInstruction(Instruction &I) {
-  // Some instructions are only used in the context of exception handling, which
-  // we ignore for now.
+  // Some instructions are only used in the context of exception handling,
+  // which we ignore for now.
   if (isa<LandingPadInst>(I) || isa<ResumeInst>(I))
     return;
 
@@ -1050,10 +1071,10 @@ CallInst *Symbolizer::createValueExpression(Value *V, IRBuilder<> &IRB) {
                             {IRB.CreateZExtOrBitCast(V, IRB.getInt64Ty()),
                              IRB.getInt8(valueType->getPrimitiveSizeInBits())});
     } else {
-      // Anything up to the maximum supported 128 bits. Those integers are a bit
-      // tricky because the symbolic backends don't support them per se. We have
-      // a special function in the run-time library that handles them, usually
-      // by assembling expressions from smaller chunks.
+      // Anything up to the maximum supported 128 bits. Those integers are a
+      // bit tricky because the symbolic backends don't support them per se.
+      // We have a special function in the run-time library that handles them,
+      // usually by assembling expressions from smaller chunks.
       return IRB.CreateCall(
           runtime.buildInteger128,
           {IRB.CreateTrunc(IRB.CreateLShr(V, ConstantInt::get(valueType, 64)),

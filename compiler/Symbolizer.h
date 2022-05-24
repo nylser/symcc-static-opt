@@ -39,6 +39,8 @@ public:
   llvm::BasicBlock *getEasyBlock();
   llvm::BasicBlock *getSymbolizedBlock();
   llvm::BasicBlock *getMergeBlock();
+  std::map<llvm::Instruction *, llvm::BasicBlock *> callSplitBlocks;
+  std::list<llvm::StoreInst *> storesToInstrument;
   llvm::ValueToValueMapTy *getVMap();
 
 private:
@@ -119,6 +121,10 @@ public:
   /// The resulting code is much longer but avoids solver calls for all
   /// operations without symbolic data.
   void shortCircuitExpressionUses();
+
+  void handleCalls(llvm::BasicBlock &B, SplitData &splitData,
+                   std::map<llvm::Instruction *, std::list<const llvm::Value *>>
+                       *afterCallDependencies);
 
   void insertBasicBlockCheck(
       llvm::BasicBlock &B, SplitData &splitData,
