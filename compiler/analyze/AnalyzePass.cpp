@@ -15,7 +15,11 @@ using namespace SVF;
 
 char AnalyzePass::ID = 0;
 
-bool AnalyzePass::doInitialization(Module &M) {
+bool AnalyzePass::doInitialization(Module &M) { return false; }
+
+bool AnalyzePass::doFinalization(llvm::Module &M) { return false; }
+
+bool AnalyzePass::runOnModule(Module &M) {
   errs() << "initializing analyze pass: " << M.getName() << "\n";
   SVFModule *svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(M);
   svfModule->buildSymbolTableInfo();
@@ -39,20 +43,6 @@ bool AnalyzePass::doInitialization(Module &M) {
   /// Sparse value-flow graph (SVFG)
   SVFGBuilder svfBuilder;
   svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
-  return false;
-}
-
-bool AnalyzePass::doFinalization(llvm::Module &M) {
-  // clean up memory
-  delete vfg;
-  delete svfg;
-  AndersenWaveDiff::releaseAndersenWaveDiff();
-  PAG::releasePAG();
-
-  return false;
-}
-
-bool AnalyzePass::runOnModule(Module &M) {
   for (Function &F : M.getFunctionList()) {
     FunctionAnalysisData *data = &functionAnalysisData[&F];
     errs() << "getting function: " << F.getName() << "\n";
@@ -142,6 +132,12 @@ bool AnalyzePass::runOnModule(Module &M) {
     errs() << "EndOfFunction\n\n";
   }
 
+  // clean up memory
+  delete vfg;
+  delete svfg;
+  AndersenWaveDiff::releaseAndersenWaveDiff();
+  PAG::releasePAG();
+
   return false;
 }
 
@@ -160,7 +156,7 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
   if (dyn_cast<Constant>(Value)) {
     return topLevel;
   }
-  errs() << "Processing " << *Value << "\n";
+  // errs() << "Processing " << *Value << "\n";
   SVF::PAGNode *pNode = pag->getPAGNode(pag->getValueNode(Value));
   const VFGNode *vNode = svfg->getDefSVFGNode(pNode);
   worklist.push(vNode);
