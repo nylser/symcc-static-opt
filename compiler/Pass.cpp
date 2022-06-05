@@ -90,107 +90,72 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ValueMap<BasicBlock *, SplitData> splitData;
 
   for (auto basicBlock : allBasicBlocks) {
-    auto data = symbolizer.splitIntoBlocks(*basicBlock);
-    splitData.insert(std::make_pair(basicBlock, data));
-    symbolizer.insertBasicBlockNotification(*data.getSymbolizedBlock());
+    auto anaDataIt = data->basicBlockData.find(basicBlock);
+    assert(anaDataIt != data->basicBlockData.end());
+    if (anaDataIt->second.empty()) {
+      symbolizer.insertBasicBlockNotification(*basicBlock);
+    } else {
+      auto data = symbolizer.splitIntoBlocks(*basicBlock);
+      splitData.insert(std::make_pair(basicBlock, data));
+      symbolizer.insertBasicBlockNotification(*data.getSymbolizedBlock());
+    }
   }
 
   for (auto *instPtr : allInstructions) {
     symbolizer.visit(instPtr);
   }
 
-  ValueMap<Instruction *, Instruction *> symbolicMerges;
+  errs() << F << "\n";
+
+  ValueMap<Value *, Instruction *> symbolicMerges;
 
   for (auto *currentBlock : allBasicBlocks) {
 
     // errs() << "instPtr Parent" << *(instPtr->getParent()) << "\n";
-    auto dependencies = data->basicBlockData.find(currentBlock);
+    auto dependenciesIt = data->basicBlockData.find(currentBlock);
     // assert(it != data->basicBlockData.end() &&
     //        "Analysis data for block is missing!");
-    assert(dependencies != data->basicBlockData.end() &&
+    assert(dependenciesIt != data->basicBlockData.end() &&
            "Dependencies for block are non-existant");
 
-    auto clonedBlockData = splitData.find(currentBlock);
+    if (dependenciesIt->second.empty())
+      continue;
 
-    for (auto *instPtr : clonedBlockData->second.storesToInstrument) {
+    auto blockSplitDataIt = splitData.find(currentBlock);
+
+    assert(blockSplitDataIt != splitData.end() && "Cloned block data missing!");
+    auto blockSplitData = blockSplitDataIt->second;
+
+    auto symBlock = blockSplitData.getSymbolizedBlock();
+    auto easyBlock = blockSplitData.getEasyBlock();
+    auto mergeBlock = blockSplitData.getMergeBlock();
+    auto easyTerminator = easyBlock->getTerminator();
+
+    auto newTerminator = easyTerminator->clone();
+
+    ReplaceInstWithInst(symBlock->getTerminator(),
+                        BranchInst::Create(mergeBlock));
+    ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
+
+    mergeBlock->getInstList().push_back(newTerminator);
+
+    for (auto *instPtr : blockSplitData.storesToInstrument) {
       errs() << "instrumenting store in easy block " << *instPtr << "\n";
       symbolizer.visitStore(*instPtr);
     }
 
-    assert(clonedBlockData != splitData.end() && "Cloned block data missing!");
-    symbolizer.insertBasicBlockCheck(*currentBlock, clonedBlockData->second,
-                                     dependencies->second, symbolicMerges);
+    // recalculate Dominator tree
+    DT.recalculate(F);
+
+    symbolizer.insertBasicBlockCheck(blockSplitData, dependenciesIt->second,
+                                     symbolicMerges, DT);
+    symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
   }
 
-  // Replace uses of PHINodes
-  auto nullExpression =
-      ConstantPointerNull::get(PointerType::getInt8PtrTy(F.getContext()));
-  for (auto value : symbolicMerges) {
-    auto originalValue = value->first;
-    auto phiNode = value->second;
-    originalValue->replaceUsesWithIf(phiNode, [&](Use &U) {
-      if (U.getUser() == phiNode) {
-        return false;
-      }
-      if (auto inst = dyn_cast<Instruction>(U.getUser())) {
-        return inst->getParent() != originalValue->getParent();
-      }
-      return true;
-    });
-    /// Fix symmerge PHINodes only coming in from specific branches
-    /// -> Create PHINodes that cover all branches
-    ValueMap<BasicBlock *, PHINode *> createdNodes;
-    for (auto &use : phiNode->uses()) {
-      auto inst = dyn_cast<Instruction>(use.getUser());
-      PHINode *newPhiNode = nullptr;
-      if (inst == phiNode || inst->getParent() == phiNode->getParent() ||
-          !inst) {
-        continue;
-      }
-      if (DT.dominates(phiNode, use)) {
-        errs() << "phiNode " << *phiNode << " dominates " << &use << "\n";
-        continue;
-      }
-      auto it = createdNodes.find(inst->getParent());
-      if (it == createdNodes.end()) {
-        // basic block doesnt already have "remerge-node"
-        for (auto pred : predecessors(inst->getParent())) {
-          if (pred == phiNode->getParent()) {
-            continue;
-          }
-          if (newPhiNode == nullptr) {
-            newPhiNode = PHINode::Create(phiNode->getType(), 0);
-            newPhiNode->addIncoming(phiNode, phiNode->getParent());
-          }
-          newPhiNode->addIncoming(nullExpression, pred);
-        }
-        if (newPhiNode != nullptr) {
-          newPhiNode->insertBefore(inst->getParent()->getFirstNonPHI());
-        }
-        createdNodes.insert(std::make_pair(inst->getParent(), newPhiNode));
-      } else
-        newPhiNode = it->second;
-
-      if (newPhiNode != nullptr) {
-        for (auto &operand : inst->operands()) {
-          if (operand.get() == phiNode) {
-            inst->setOperand(operand.getOperandNo(), newPhiNode);
-          }
-        }
-      }
-    }
-  }
-
-  for (auto *currentBlock : allBasicBlocks) {
-    auto clonedBlockData = splitData.find(currentBlock);
-    assert(clonedBlockData != splitData.end() && "Cloned block data missing!");
-    auto easyBlock = (clonedBlockData->second).getEasyBlock();
-  }
-
+  // DEBUG(errs() << F << '\n');
   symbolizer.finalizePHINodes();
-
-  // TODO: do we still need this?
-  // symbolizer.shortCircuitExpressionUses();
+  //  TODO: do we still need this?
+  //  symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());

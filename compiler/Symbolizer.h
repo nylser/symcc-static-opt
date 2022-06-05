@@ -16,7 +16,9 @@
 #define SYMBOLIZE_H
 
 #include <list>
+#include <llvm/ADT/SmallSet.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstVisitor.h>
 #include <llvm/IR/ValueMap.h>
@@ -127,10 +129,13 @@ public:
                        *afterCallDependencies);
 
   void insertBasicBlockCheck(
-      llvm::BasicBlock &B, SplitData &splitData,
-      std::list<const llvm::Value *> &dependencies,
-      llvm::ValueMap<llvm::Instruction *, llvm::Instruction *> &symbolicMerges);
+      SplitData &splitData, std::list<const llvm::Value *> &dependencies,
+      llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges,
+      llvm::DominatorTree &DT);
   SplitData splitIntoBlocks(llvm::BasicBlock &B);
+  void populateMergeBlock(
+      SplitData &splitData,
+      llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges);
   void postProcessBasicBlockCheck(llvm::BasicBlock &B);
 
   void handleIntrinsicCall(llvm::CallBase &I);
