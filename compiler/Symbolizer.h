@@ -77,7 +77,8 @@ public:
   /// steps.
   ///
   /// Important! Calling this function invalidates symbolicExpressions.
-  void finalizePHINodes();
+  void finalizePHINodes(
+      llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges);
 
   /// Rewrite symbolic computation to only occur if some operand is symbolic.
   ///
@@ -383,6 +384,14 @@ private:
   /// Therefore, we keep a record of all the places that construct expressions
   /// and insert the fast path later.
   std::vector<SymbolicComputation> expressionUses;
+
+  /// Keeping record of "merge"-replacements in phiNodes. This is relevant to
+  /// correctly finalize PHINodes with enabled static optimizations
+  ///
+  /// TODO: Maybe solve this better later. The whole merge concept doesn't yet
+  /// really seem mature
+  std::map<llvm::PHINode *, std::map<llvm::Value *, llvm::Value *>>
+      phiReplacements;
 };
 
 #endif

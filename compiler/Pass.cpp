@@ -105,8 +105,6 @@ bool SymbolizePass::runOnFunction(Function &F) {
     symbolizer.visit(instPtr);
   }
 
-  symbolizer.finalizePHINodes();
-
   ValueMap<Value *, Instruction *> symbolicMerges;
 
   for (auto *currentBlock : allBasicBlocks) {
@@ -131,6 +129,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     auto mergeBlock = blockSplitData.getMergeBlock();
     auto easyTerminator = easyBlock->getTerminator();
 
+    // fix up terminators
     auto newTerminator = easyTerminator->clone();
 
     ReplaceInstWithInst(symBlock->getTerminator(),
@@ -152,6 +151,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
   }
 
+  symbolizer.finalizePHINodes(symbolicMerges);
   // DEBUG(errs() << F << '\n');
   //  TODO: do we still need this?
   //  symbolizer.shortCircuitExpressionUses();

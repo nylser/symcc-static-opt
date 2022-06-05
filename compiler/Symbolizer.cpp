@@ -57,16 +57,20 @@ void Symbolizer::insertBasicBlockNotification(llvm::BasicBlock &B) {
   IRB.CreateCall(runtime.notifyBasicBlock, getTargetPreferredInt(&B));
 }
 
-void Symbolizer::finalizePHINodes() {
+void Symbolizer::finalizePHINodes(
+    ValueMap<Value *, Instruction *> &symbolicMerges) {
   SmallPtrSet<PHINode *, 32> nodesToErase;
 
   for (auto *phi : phiNodes) {
     auto symbolicPHI = cast<PHINode>(symbolicExpressions[phi]);
+    errs() << "Finalizing" << *symbolicPHI << "\n"
+           << "With: " << *phi << "\n";
 
     // A PHI node that receives only compile-time constants can be replaced by
     // a null expression.
-    if (std::all_of(phi->op_begin(), phi->op_end(), [this](Value *input) {
-          return (getSymbolicExpression(input) == nullptr);
+    if (std::all_of(phi->op_begin(), phi->op_end(), [this, phi](Value *input) {
+          return (getSymbolicExpression(phiReplacements[phi][input]) ==
+                  nullptr);
         })) {
       nodesToErase.insert(symbolicPHI);
       continue;
@@ -74,9 +78,26 @@ void Symbolizer::finalizePHINodes() {
 
     for (unsigned incoming = 0, totalIncoming = phi->getNumIncomingValues();
          incoming < totalIncoming; incoming++) {
-      symbolicPHI->setIncomingValue(
-          incoming,
-          getSymbolicExpressionOrNull(phi->getIncomingValue(incoming)));
+      symbolicPHI->setIncomingBlock(incoming, phi->getIncomingBlock(incoming));
+      auto origIncoming = phi->getIncomingValue(incoming);
+      auto incomingReplaced = phiReplacements[phi][origIncoming];
+      errs() << *incomingReplaced << "\n";
+      auto symExpr = getSymbolicExpression(incomingReplaced);
+      errs() << *symExpr << "\n";
+      Value *finalExpr = symExpr;
+      if (symExpr == nullptr) {
+        finalExpr = ConstantPointerNull::get(
+            IntegerType::getInt8PtrTy(origIncoming->getContext()));
+      } else {
+        auto it = symbolicMerges.find(symExpr);
+        if (it != symbolicMerges.end()) {
+          finalExpr = it->second;
+        }
+      }
+      symbolicPHI->setIncomingValue(incoming, finalExpr);
+      // symbolicPHI->setIncomingValue(
+      //     incoming,
+      //     getSymbolicExpressionOrNull(phi->getIncomingValue(incoming)));
     }
   }
 
@@ -449,17 +470,22 @@ void Symbolizer::populateMergeBlock(
       symbolicMerges.insert(std::make_pair(&inst, phiNode));
     }
   }
-
   // replace uses of old values with new PHINodes
   for (auto value : newMappingsFromOriginal) {
+    std::vector<PHINode *> replaced;
     value->first->replaceUsesWithIf(value->second, [&](Use &U) {
       if (U.getUser() == value->second) {
         return false;
       }
       if (auto inst = dyn_cast<Instruction>(U.getUser())) {
-        if (auto *phi = dyn_cast<PHINode>(inst))
+        if (inst->getParent() == symbolizedBlock) {
+          return false;
+        }
+        if (auto *phi = dyn_cast<PHINode>(inst)) {
           errs() << "phi replace in " << *inst << "\n";
-        return inst->getParent() != symbolizedBlock;
+          replaced.push_back(phi);
+        }
+        return true;
       }
       return true;
     });
@@ -469,6 +495,13 @@ void Symbolizer::populateMergeBlock(
       if (auto phiNode = dyn_cast<PHINode>(user)) {
         phiNode->replaceIncomingBlockWith(symbolizedBlock, mergeBlock);
       }
+    }
+
+    for (auto phi : replaced) {
+      auto phiMap = &phiReplacements[phi];
+      phiMap->insert(std::make_pair(value.second, value.first));
+      errs() << "phi replace " << *phi << " {" << *value.second << ": "
+             << *value.first << "}\n";
     }
   }
 
