@@ -105,7 +105,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     symbolizer.visit(instPtr);
   }
 
-  errs() << F << "\n";
+  symbolizer.finalizePHINodes();
 
   ValueMap<Value *, Instruction *> symbolicMerges;
 
@@ -153,7 +153,6 @@ bool SymbolizePass::runOnFunction(Function &F) {
   }
 
   // DEBUG(errs() << F << '\n');
-  symbolizer.finalizePHINodes();
   //  TODO: do we still need this?
   //  symbolizer.shortCircuitExpressionUses();
 

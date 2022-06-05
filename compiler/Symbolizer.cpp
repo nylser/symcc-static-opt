@@ -74,8 +74,6 @@ void Symbolizer::finalizePHINodes() {
 
     for (unsigned incoming = 0, totalIncoming = phi->getNumIncomingValues();
          incoming < totalIncoming; incoming++) {
-      // fix up incoming blocks
-      symbolicPHI->setIncomingBlock(incoming, phi->getIncomingBlock(incoming));
       symbolicPHI->setIncomingValue(
           incoming,
           getSymbolicExpressionOrNull(phi->getIncomingValue(incoming)));
