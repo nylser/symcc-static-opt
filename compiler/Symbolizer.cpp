@@ -81,7 +81,10 @@ void Symbolizer::finalizePHINodes(
       symbolicPHI->setIncomingBlock(incoming, phi->getIncomingBlock(incoming));
       auto origIncoming = phi->getIncomingValue(incoming);
       auto incomingReplaced = phiReplacements[phi][origIncoming];
-      errs() << *incomingReplaced << "\n";
+      if (incomingReplaced == nullptr) {
+        errs() << *origIncoming << " has no phiReplacement\n";
+        incomingReplaced = origIncoming;
+      }
       auto symExpr = getSymbolicExpression(incomingReplaced);
       errs() << *symExpr << "\n";
       Value *finalExpr = symExpr;
@@ -402,9 +405,6 @@ void Symbolizer::insertBasicBlockCheck(
   auto symbolizedBlock = splitData.getSymbolizedBlock();
   auto mergeBlock = splitData.getMergeBlock();
   auto easyBlock = splitData.getEasyBlock();
-  /// here, we don't have any nullChecks?
-  /// Does that mean there are no deps? -> no need to symbolize?
-  /// for now, we just keep on branching to the symbolized block.
   if (nullChecks.size() > 0) {
     auto *allConcrete = nullChecks[0];
     for (unsigned argIndex = 1; argIndex < nullChecks.size(); argIndex++) {
@@ -414,7 +414,10 @@ void Symbolizer::insertBasicBlockCheck(
         BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   } else {
-    BranchInst *branchInst = BranchInst::Create(easyBlock);
+    /// here, we don't have any nullChecks?
+    /// Does that mean there are no deps? -> no need to symbolize? most probably
+    /// not! for now, we just keep on branching to the symbolized block.
+    BranchInst *branchInst = BranchInst::Create(symbolizedBlock);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   }
 }
