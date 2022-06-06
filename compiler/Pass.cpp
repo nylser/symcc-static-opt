@@ -152,11 +152,11 @@ bool SymbolizePass::runOnFunction(Function &F) {
   }
 
   symbolizer.finalizePHINodes(symbolicMerges);
-  // DEBUG(errs() << F << '\n');
-  //  TODO: do we still need this?
+
+  ///  TODO: do we still need this?
   //  symbolizer.shortCircuitExpressionUses();
 
-  // DEBUG(errs() << F << '\n');
+  DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());
   // assert(!verifyFunction(F, &errs()) &&
   //        "SymbolizePass produced invalid bitcode");

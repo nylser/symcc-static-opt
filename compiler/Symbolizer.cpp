@@ -281,21 +281,55 @@ void Symbolizer::handleCalls(
 }
 
 Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
-                                   BasicBlock *endBlock,
+                                   BasicBlock *prevBlock, BasicBlock *endBlock,
                                    SmallSet<BasicBlock *, 8> *visited,
-                                   Instruction *currentDependency) {
+                                   Instruction *currentDependency,
+                                   DominatorTree &DT) {
+  errs() << "reached " << currentBlock->getName() << "\n";
+  if (pred_size(currentBlock) > 1) {
+    errs() << "more than 1 predecessor!\n";
+    auto newPhiNode =
+        PHINode::Create(currentDependency->getType(), pred_size(currentBlock));
+
+    for (auto *predecessor : predecessors(currentBlock)) {
+      if (predecessor == prevBlock ||
+          visited->find(predecessor) != visited->end()) {
+        newPhiNode->addIncoming(currentDependency, predecessor);
+      } else {
+        newPhiNode->addIncoming(
+            ConstantPointerNull::get(
+                IntegerType::getInt8PtrTy(currentDependency->getContext())),
+            predecessor);
+      }
+    }
+    currentBlock->getInstList().push_front(newPhiNode);
+    currentDependency = newPhiNode;
+  }
+
   if (currentBlock == endBlock) {
     errs() << "reached end block\n";
-    return nullptr;
+    return currentDependency;
   }
 
   std::set<BasicBlock *> nonLoopingSuccessors;
+  Instruction *ret = nullptr;
 
   for (auto *successor : successors(currentBlock)) {
     auto it = visited->find(successor);
     if (it == visited->end()) {
       visited->insert(successor);
-      traverseDownFromBlock(successor, endBlock, visited, currentDependency);
+      auto result = traverseDownFromBlock(successor, currentBlock, endBlock,
+                                          visited, currentDependency, DT);
+      if (result != nullptr) {
+        errs() << "got non null result: " << *result << "\n";
+        return result;
+      }
+      if (ret == nullptr && result != nullptr) {
+        ret = result;
+        return result;
+      }
+      assert(!(ret != nullptr && result != nullptr && ret != result) &&
+             "Found multiple paths to end block?");
       nonLoopingSuccessors.insert(successor);
     } else {
       errs() << "Skipping already visited block " << successor->getName()
@@ -304,20 +338,23 @@ Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
     }
   }
 
-  errs() << "non looping successors for " << currentBlock->getName() << "\n";
+  /*errs() << "non looping successors for " << currentBlock->getName() << "\n";
   for (auto *nls : nonLoopingSuccessors) {
     errs() << nls->getName() << " ,";
-  }
+  }*/
   errs() << "\n";
+  if (ret != nullptr) {
+    return ret;
+  }
   return nullptr;
 }
 
 Instruction *traverseDownFromInstruction(BasicBlock *endBlock,
-                                         Instruction *startInstruction) {
+                                         Instruction *startInstruction,
+                                         DominatorTree &DT) {
   SmallSet<BasicBlock *, 8> visited;
-  traverseDownFromBlock(startInstruction->getParent(), endBlock, &visited,
-                        startInstruction);
-  return nullptr;
+  return traverseDownFromBlock(startInstruction->getParent(), nullptr, endBlock,
+                               &visited, startInstruction, DT);
 }
 
 void Symbolizer::insertBasicBlockCheck(
@@ -373,23 +410,18 @@ void Symbolizer::insertBasicBlockCheck(
      */
     if (auto inst = dyn_cast<Instruction>(finalExpr)) {
       if (B != inst->getParent() && !DT.dominates(inst, B)) {
-        traverseDownFromInstruction(B, inst);
         errs() << "no domination!" << *finalExpr << " to block: " << *B << "\n";
+        finalExpr = traverseDownFromInstruction(B, inst, DT);
+        errs() << "built new expression: " << *finalExpr << "\n";
       }
     }
     valueExprList.push_back(finalExpr);
   }
-
   std::set<Value *> valueExprSet;
   valueExprSet.insert(valueExprList.begin(), valueExprList.end());
+  IRB.SetInsertPoint(B->getTerminator());
   // valueExprToGo.push_back(valueExprList.begin(), valueExprList.end());
   for (auto &inst : B->getInstList()) {
-    if (valueExprSet.size() == 0) {
-      IRB.SetInsertPoint(&inst);
-      break;
-    }
-    if (valueExprSet.find(&inst) != valueExprSet.end())
-      valueExprSet.erase(&inst);
     for (auto &op : inst.operands()) {
       auto it = symbolicMerges.find(op.get());
       if (it == symbolicMerges.end()) {
@@ -409,7 +441,7 @@ void Symbolizer::insertBasicBlockCheck(
     auto *allConcrete = nullChecks[0];
     for (unsigned argIndex = 1; argIndex < nullChecks.size(); argIndex++) {
       allConcrete = IRB.CreateAnd(allConcrete, nullChecks[argIndex]);
-    }
+        }
     BranchInst *branchInst =
         BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
