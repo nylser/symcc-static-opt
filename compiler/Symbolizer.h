@@ -33,9 +33,8 @@ public:
   SplitData(llvm::BasicBlock *checkBlock, llvm::BasicBlock *easyBlock,
             llvm::BasicBlock *symbolizedBlock, llvm::BasicBlock *mergeBlock,
             llvm::ValueToValueMapTy *VMap)
-      : m_checkBlock(checkBlock), m_easyBlock(easyBlock),
-        m_symbolizedBlock(symbolizedBlock), m_mergeBlock(mergeBlock),
-        m_VMap(VMap){};
+      : m_checkBlock(checkBlock), m_symbolizedBlock(symbolizedBlock),
+        m_easyBlock(easyBlock), m_mergeBlock(mergeBlock), m_VMap(VMap){};
 
   llvm::BasicBlock *getCheckBlock();
   llvm::BasicBlock *getEasyBlock();

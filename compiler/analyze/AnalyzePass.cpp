@@ -4,20 +4,23 @@
 #include <llvm/IR/User.h>
 #include <llvm/Support/raw_ostream.h>
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverloaded-virtual"
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wself-assign"
+#pragma clang diagnostic ignored "-Wignored-qualifiers"
 #include "SVF-FE/LLVMUtil.h"
 #include "SVF-FE/PAGBuilder.h"
 #include "Util/Options.h"
 #include "Util/SVFModule.h"
 #include "WPA/Andersen.h"
+#pragma clang diagnostic pop
 
 using namespace llvm;
 using namespace SVF;
 
 char AnalyzePass::ID = 0;
-
-bool AnalyzePass::doInitialization(Module &M) { return false; }
-
-bool AnalyzePass::doFinalization(llvm::Module &M) { return false; }
 
 bool AnalyzePass::runOnModule(Module &M) {
   errs() << "initializing analyze pass: " << M.getName() << "\n";
@@ -33,9 +36,6 @@ bool AnalyzePass::runOnModule(Module &M) {
 
   /// Call Graph
   PTACallGraph *callgraph = ander->getPTACallGraph();
-
-  /// ICFG
-  ICFG *icfg = pag->getICFG();
 
   /// Value-Flow Graph (VFG)
   vfg = new VFG(callgraph);
@@ -145,6 +145,7 @@ const SVF::PAGNode *getLHSTopLevPtr(const VFGNode *);
 
 llvm::SmallSet<const llvm::Value *, 8>
 AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
+  errs() << *Value << "\n";
   auto it = valueDependencies.find(Value);
   if (it != valueDependencies.end()) {
     errs() << "short circuit!\n";
@@ -161,8 +162,15 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
   const VFGNode *vNode = svfg->getDefSVFGNode(pNode);
   worklist.push(vNode);
 
+  std::set<const VFGNode *> visited;
+
   while (!worklist.empty()) {
     auto *currentNode = worklist.pop();
+    if (visited.find(currentNode) != visited.end()) {
+      /** Skip already visited nodes in loops? TODO: What is the consequence **/
+      continue;
+    }
+    visited.insert(currentNode);
     auto *pagNode = getLHSTopLevPtr(currentNode);
 
     if (pagNode != nullptr) {

@@ -139,7 +139,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     mergeBlock->getInstList().push_back(newTerminator);
 
     for (auto *instPtr : blockSplitData.storesToInstrument) {
-      errs() << "instrumenting store in easy block " << *instPtr << "\n";
+      // errs() << "instrumenting store in easy block " << *instPtr << "\n";
       symbolizer.visitStore(*instPtr);
     }
 
@@ -156,7 +156,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ///  TODO: do we still need this?
   //  symbolizer.shortCircuitExpressionUses();
 
-  DEBUG(errs() << F << '\n');
+  // DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());
   // assert(!verifyFunction(F, &errs()) &&
   //        "SymbolizePass produced invalid bitcode");

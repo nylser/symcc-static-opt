@@ -435,13 +435,12 @@ void Symbolizer::insertBasicBlockCheck(
   }
   // errs() << "getting references\n";
   auto symbolizedBlock = splitData.getSymbolizedBlock();
-  auto mergeBlock = splitData.getMergeBlock();
   auto easyBlock = splitData.getEasyBlock();
   if (nullChecks.size() > 0) {
     auto *allConcrete = nullChecks[0];
     for (unsigned argIndex = 1; argIndex < nullChecks.size(); argIndex++) {
       allConcrete = IRB.CreateAnd(allConcrete, nullChecks[argIndex]);
-        }
+    }
     BranchInst *branchInst =
         BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
@@ -561,8 +560,6 @@ void Symbolizer::postProcessBasicBlockCheck(BasicBlock &B) {
     return;
   }
 
-  for (auto &inst : B.getInstList()) {
-  }
   // errs() << *mergeBlock << "\n";
 }
 

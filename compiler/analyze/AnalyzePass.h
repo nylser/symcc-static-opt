@@ -9,6 +9,11 @@
 #include <llvm/Pass.h>
 
 #pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Woverloaded-virtual"
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wunused-variable"
+#pragma clang diagnostic ignored "-Wself-assign"
+#pragma clang diagnostic ignored "-Wignored-qualifiers"
 #include "Graphs/SVFG.h"
 #pragma clang diagnostic pop
 
@@ -27,9 +32,7 @@ public:
 
   AnalyzePass() : ModulePass(ID) {}
 
-  bool doInitialization(llvm::Module &M) override;
   bool runOnModule(llvm::Module &M) override;
-  bool doFinalization(llvm::Module &M) override;
 
   FunctionAnalysisData *getFunctionAnalysisData(llvm::Function &F);
 
