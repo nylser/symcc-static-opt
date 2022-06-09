@@ -23,7 +23,7 @@ using namespace SVF;
 char AnalyzePass::ID = 0;
 
 bool AnalyzePass::runOnModule(Module &M) {
-  errs() << "initializing analyze pass: " << M.getName() << "\n";
+  // errs() << "initializing analyze pass: " << M.getName() << "\n";
   SVFModule *svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(M);
   svfModule->buildSymbolTableInfo();
 
@@ -45,7 +45,7 @@ bool AnalyzePass::runOnModule(Module &M) {
   svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
   for (Function &F : M.getFunctionList()) {
     FunctionAnalysisData *data = &functionAnalysisData[&F];
-    errs() << "getting function: " << F.getName() << "\n";
+    // errs() << "getting function: " << F.getName() << "\n";
     for (BasicBlock &B : F)
 
     /**
@@ -62,7 +62,7 @@ bool AnalyzePass::runOnModule(Module &M) {
       ValueMap<CallInst *, SmallSet<Value *, 8>> callInstDeps;
       CallInst *lastCall = nullptr;
 
-      errs() << B.getName() << "\n";
+      // errs() << B.getName() << "\n";
       for (Instruction &I : B) {
 
         if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
@@ -129,7 +129,7 @@ bool AnalyzePass::runOnModule(Module &M) {
       }
     }
 
-    errs() << "EndOfFunction\n\n";
+    // errs() << "EndOfFunction\n\n";
   }
 
   // clean up memory
@@ -145,10 +145,10 @@ const SVF::PAGNode *getLHSTopLevPtr(const VFGNode *);
 
 llvm::SmallSet<const llvm::Value *, 8>
 AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
-  errs() << *Value << "\n";
+  // errs() << *Value << "\n";
   auto it = valueDependencies.find(Value);
   if (it != valueDependencies.end()) {
-    errs() << "short circuit!\n";
+    // errs() << "short circuit!\n";
     return it->second;
   }
   llvm::SmallSet<const llvm::Value *, 8> topLevel;
@@ -176,7 +176,7 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
     if (pagNode != nullptr) {
       if (pagNode->getNodeKind() == pagNode->DummyObjNode ||
           pagNode->getNodeKind() == pagNode->DummyValNode) {
-        errs() << "Skipping DummyNode! " << *currentNode << "\n";
+        // errs() << "Skipping DummyNode! " << *currentNode << "\n";
         continue;
       }
       const llvm::Value *nodeValue = pagNode->getValue();

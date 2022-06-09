@@ -151,12 +151,11 @@ bool SymbolizePass::runOnFunction(Function &F) {
     symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
   }
 
+  ///  TODO: do we still need this?
+  symbolizer.shortCircuitExpressionUses();
   symbolizer.finalizePHINodes(symbolicMerges);
 
-  ///  TODO: do we still need this?
-  //  symbolizer.shortCircuitExpressionUses();
-
-  // DEBUG(errs() << F << '\n');
+  DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());
   // assert(!verifyFunction(F, &errs()) &&
   //        "SymbolizePass produced invalid bitcode");
