@@ -133,6 +133,7 @@ public:
       llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges,
       llvm::DominatorTree &DT);
   SplitData splitIntoBlocks(llvm::BasicBlock &B);
+  void finalizeTerminators(SplitData &splitData);
   void populateMergeBlock(
       SplitData &splitData,
       llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges);

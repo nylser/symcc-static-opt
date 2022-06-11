@@ -124,19 +124,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     assert(blockSplitDataIt != splitData.end() && "Cloned block data missing!");
     auto blockSplitData = blockSplitDataIt->second;
 
-    auto symBlock = blockSplitData.getSymbolizedBlock();
-    auto easyBlock = blockSplitData.getEasyBlock();
-    auto mergeBlock = blockSplitData.getMergeBlock();
-    auto easyTerminator = easyBlock->getTerminator();
-
-    // fix up terminators
-    auto newTerminator = easyTerminator->clone();
-
-    ReplaceInstWithInst(symBlock->getTerminator(),
-                        BranchInst::Create(mergeBlock));
-    ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
-
-    mergeBlock->getInstList().push_back(newTerminator);
+    symbolizer.finalizeTerminators(blockSplitData);
 
     for (auto *instPtr : blockSplitData.storesToInstrument) {
       // errs() << "instrumenting store in easy block " << *instPtr << "\n";

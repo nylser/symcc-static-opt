@@ -453,6 +453,67 @@ void Symbolizer::insertBasicBlockCheck(
   }
 }
 
+void Symbolizer::finalizeTerminators(SplitData &splitData) {
+
+  auto symBlock = splitData.getSymbolizedBlock();
+  auto easyBlock = splitData.getEasyBlock();
+  auto mergeBlock = splitData.getMergeBlock();
+  auto easyTerminator = easyBlock->getTerminator();
+
+  if (auto retInst = dyn_cast<InvokeInst>(easyTerminator)) {
+    /// return instruction returns the control flow of the program to the caller
+    /// in case the symbolic runtime needs it, we may need to set parameter
+    /// expressions in any case
+  } else if (auto brInst = dyn_cast<BranchInst>(easyTerminator)) {
+    /// branch instructions are simple: copy this branch instruction to the end
+    /// of mergeBlock and modify symBlock and easyBlock to branch to mergeBlock
+  } else if (auto switchInst = dyn_cast<SwitchInst>(easyTerminator)) {
+    /// switch should be equivalent in handling to branch instruction
+  } else if (auto indirectBrInst = dyn_cast<IndirectBrInst>(easyTerminator)) {
+    /// this is a jump depending on the address contained in a register
+    /// should be moved to mergeBlock just like branch. Here we need to make
+    /// sure to use the merged address in the terminator!
+  } else if (auto invokeInst = dyn_cast<InvokeInst>(easyTerminator)) {
+    /// invoke instruction is more complicated due to the way it is handled by
+    /// the symbolizer: it performs a split if the edge of the invoking block to
+    /// the "normal" block is critical: if "normal" block has more than 1
+    /// incoming edge this also means, because of our merging technique, that
+    /// this edge always needs to be split in basic block mode.
+    /// One technicality we shouldn't forget: symCC creates a return expression
+    /// in the split block: this also needs to be part of the symMerges in
+    /// mergeBlock
+    ///
+    /// the handling of the two terminators needs to differ here:
+    ///
+    /// easyBlock: handling is quite easy, just replace the "normal" label
+    /// with a jump to mergeBlock
+    ///
+    /// symBlock: modify the branch the "critical" split block to the
+    /// mergeBlock
+    ///
+    /// mergeBlock: branch to invoke "normal" label. Don't forget to
+    /// merge the result of the call
+  } else if (auto callBrInst = dyn_cast<CallBrInst>(easyTerminator)) {
+    /// callbr instruction can jump to one of the indirect labels or the
+    /// fallthrough label
+  } else if (auto resumeInst = dyn_cast<ResumeInst>(easyTerminator)) {
+  } else if (auto catchSwitchInst = dyn_cast<CatchSwitchInst>(easyTerminator)) {
+  } else if (auto catchRetInst = dyn_cast<CatchReturnInst>(easyTerminator)) {
+  } else if (auto cleanupRetInst =
+                 dyn_cast<CleanupReturnInst>(easyTerminator)) {
+  } else if (auto unreachableInst = dyn_cast<UnreachableInst>(easyTerminator)) {
+  }
+
+  // fix up terminators
+  auto newTerminator = easyTerminator->clone();
+
+  ReplaceInstWithInst(symBlock->getTerminator(),
+                      BranchInst::Create(mergeBlock));
+  ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
+
+  mergeBlock->getInstList().push_back(newTerminator);
+}
+
 void Symbolizer::populateMergeBlock(
     SplitData &splitData,
     ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges) {
