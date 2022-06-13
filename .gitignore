@@ -40,3 +40,10 @@ TAGS
 # Clang tooling
 compile_commands.json
 .clangd
+
+# build outputs
+build*/
+
+
+# Mac OS files
+*.DS_Store
