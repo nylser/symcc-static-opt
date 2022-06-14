@@ -86,7 +86,6 @@ void Symbolizer::finalizePHINodes(
         incomingReplaced = origIncoming;
       }
       auto symExpr = getSymbolicExpression(incomingReplaced);
-      errs() << *symExpr << "\n";
       Value *finalExpr = symExpr;
       if (symExpr == nullptr) {
         finalExpr = ConstantPointerNull::get(
@@ -459,21 +458,59 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
   auto easyBlock = splitData.getEasyBlock();
   auto mergeBlock = splitData.getMergeBlock();
   auto easyTerminator = easyBlock->getTerminator();
+  auto symTerminator = symBlock->getTerminator();
 
-  if (auto retInst = dyn_cast<InvokeInst>(easyTerminator)) {
+  if (auto easyRetInst = dyn_cast<ReturnInst>(easyTerminator)) {
     /// return instruction returns the control flow of the program to the caller
     /// in case the symbolic runtime needs it, we may need to set parameter
     /// expressions in any case
-  } else if (auto brInst = dyn_cast<BranchInst>(easyTerminator)) {
+    auto symRetInst = dyn_cast<ReturnInst>(symTerminator);
+    assert(symRetInst != nullptr);
+    IRBuilder<> IRB(mergeBlock);
+    if (symRetInst->getReturnValue() != nullptr) {
+      auto setReturnExpr = dyn_cast<CallInst>(symRetInst->getPrevNode());
+      assert(setReturnExpr != nullptr);
+
+      /// theoretical handling possibility:
+      /// take the setReturnExpression() call and move it to the merge block
+      /// generate a value expression for the "return-value" of the easy block
+      /// phinode: if from sym, use original expression, if from easy use
+      /// generated valueExpression
+
+      // need to reference the merge expression here? populateMergeBlock is
+      // executed afterwards
+      auto valExpr = createValueExpression(easyRetInst->getReturnValue(), IRB);
+      auto phiNode = IRB.CreatePHI(valExpr->getType(), 2);
+      phiNode->addIncoming(valExpr, easyBlock);
+      phiNode->addIncoming(
+          getSymbolicExpressionOrNull(symRetInst->getReturnValue()), symBlock);
+      IRB.CreateCall(runtime.setReturnExpression, phiNode);
+      IRB.CreateRet(easyRetInst->getReturnValue());
+      ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
+      ReplaceInstWithInst(easyRetInst, BranchInst::Create(mergeBlock));
+    } else {
+      IRB.CreateRet(symRetInst->getReturnValue());
+    }
+
+    // } else if (auto brInst = dyn_cast<BranchInst>(easyTerminator)) {
+
     /// branch instructions are simple: copy this branch instruction to the end
     /// of mergeBlock and modify symBlock and easyBlock to branch to mergeBlock
-  } else if (auto switchInst = dyn_cast<SwitchInst>(easyTerminator)) {
+
+    // } else if (auto switchInst = dyn_cast<SwitchInst>(easyTerminator)) {
     /// switch should be equivalent in handling to branch instruction
-  } else if (auto indirectBrInst = dyn_cast<IndirectBrInst>(easyTerminator)) {
+
+    // } else if (auto indirectBrInst =
+    // dyn_cast<IndirectBrInst>(easyTerminator))
+    //{
+
     /// this is a jump depending on the address contained in a register
     /// should be moved to mergeBlock just like branch. Here we need to make
     /// sure to use the merged address in the terminator!
-  } else if (auto invokeInst = dyn_cast<InvokeInst>(easyTerminator)) {
+
+  } else if (auto easyInvokeInst = dyn_cast<InvokeInst>(easyTerminator)) {
+    auto symInvokeInst = dyn_cast<InvokeInst>(symTerminator);
+    assert(symInvokeInst != nullptr);
     /// invoke instruction is more complicated due to the way it is handled by
     /// the symbolizer: it performs a split if the edge of the invoking block to
     /// the "normal" block is critical: if "normal" block has more than 1
@@ -493,25 +530,61 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
     ///
     /// mergeBlock: branch to invoke "normal" label. Don't forget to
     /// merge the result of the call
+    auto normalDest = easyInvokeInst->getNormalDest();
+    if (symInvokeInst->getNormalDest() != normalDest) {
+      // in this case, SplitCriticalEdge has created a new split
+      auto splitCritBlock = symInvokeInst->getNormalDest();
+      // there should be an unconditional branch at the end of this block to the
+      // "previous" normal block
+      auto brInst = dyn_cast<BranchInst>(splitCritBlock->getTerminator());
+      assert(brInst != nullptr);
+      assert(brInst->isUnconditional() &&
+             brInst->getSuccessor(0) == normalDest);
+      brInst->setSuccessor(0, mergeBlock);
+    } else {
+      symInvokeInst->setNormalDest(mergeBlock);
+    }
+    easyInvokeInst->setNormalDest(mergeBlock);
+    BranchInst::Create(normalDest, mergeBlock);
   } else if (auto callBrInst = dyn_cast<CallBrInst>(easyTerminator)) {
+    /// not handled by symcc
     /// callbr instruction can jump to one of the indirect labels or the
     /// fallthrough label
-  } else if (auto resumeInst = dyn_cast<ResumeInst>(easyTerminator)) {
-  } else if (auto catchSwitchInst = dyn_cast<CatchSwitchInst>(easyTerminator)) {
-  } else if (auto catchRetInst = dyn_cast<CatchReturnInst>(easyTerminator)) {
-  } else if (auto cleanupRetInst =
-                 dyn_cast<CleanupReturnInst>(easyTerminator)) {
-  } else if (auto unreachableInst = dyn_cast<UnreachableInst>(easyTerminator)) {
+    /// puzzled how to handle this: normal label or any of the indirect labels?
+    /// would need to split of the branch to any of the indirect labels?
+    assert(false && "Unhandled instruction callbr");
+    // } else if (auto resumeInst = dyn_cast<ResumeInst>(easyTerminator)) {
+    /// not handled by symcc
+    /// resumes exception handling (therefore not relevant for further control
+    /// flow, it has no successors)
+    /// can be left as is?
+    // } else if (auto catchSwitchInst =
+    // dyn_cast<CatchSwitchInst>(easyTerminator)) {
+    /// not handled by symcc
+
+    //} else if (auto catchRetInst = dyn_cast<CatchReturnInst>(easyTerminator))
+    //{
+
+    /// not handled by symcc
+
+    //} else if (auto cleanupRetInst =
+    // dyn_cast<CleanupReturnInst>(easyTerminator)) {
+    //} else if (auto unreachableInst =
+    // dyn_cast<UnreachableInst>(easyTerminator)) {
+
+    /// this one does not need to be handled (as the end of this basic block
+    /// cannot be reached)
+  } else {
+    /// fallthrough handling
+    // fix up terminators
+    auto newTerminator = easyTerminator->clone();
+
+    ReplaceInstWithInst(symBlock->getTerminator(),
+                        BranchInst::Create(mergeBlock));
+    ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
+
+    mergeBlock->getInstList().push_back(newTerminator);
   }
-
-  // fix up terminators
-  auto newTerminator = easyTerminator->clone();
-
-  ReplaceInstWithInst(symBlock->getTerminator(),
-                      BranchInst::Create(mergeBlock));
-  ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
-
-  mergeBlock->getInstList().push_back(newTerminator);
 }
 
 void Symbolizer::populateMergeBlock(
