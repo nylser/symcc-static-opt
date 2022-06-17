@@ -84,6 +84,9 @@ void Symbolizer::finalizePHINodes(
       if (incomingReplaced == nullptr) {
         errs() << *origIncoming << " has no phiReplacement\n";
         incomingReplaced = origIncoming;
+      } else {
+        errs() << "replacing: " << *origIncoming << "\n";
+        errs() << "replacement: " << *incomingReplaced << "\n";
       }
       auto symExpr = getSymbolicExpression(incomingReplaced);
       Value *finalExpr = symExpr;
@@ -91,6 +94,7 @@ void Symbolizer::finalizePHINodes(
         finalExpr = ConstantPointerNull::get(
             IntegerType::getInt8PtrTy(origIncoming->getContext()));
       } else {
+        errs() << "symReplacement: " << *symExpr << "\n";
         auto it = symbolicMerges.find(symExpr);
         if (it != symbolicMerges.end()) {
           finalExpr = it->second;
@@ -116,23 +120,41 @@ void Symbolizer::finalizePHINodes(
   symbolicExpressions.clear();
 }
 
-void Symbolizer::shortCircuitExpressionUses() {
+void Symbolizer::shortCircuitExpressionUses(SymbolicMerges &symbolicMerges,
+                                            DominatorTree &DT) {
   for (auto &symbolicComputation : expressionUses) {
     assert(!symbolicComputation.inputs.empty() &&
            "Symbolic computation has no inputs");
-
     IRBuilder<> IRB(symbolicComputation.firstInstruction);
 
     // Build the check whether any input expression is non-null (i.e., there
     // is a symbolic input).
     auto *nullExpression = ConstantPointerNull::get(IRB.getInt8PtrTy());
     std::vector<Value *> nullChecks;
+
+    for (auto &input : symbolicComputation.inputs) {
+      // only execute this if the user is outside the block the input is defined
+      // in?, which means that there might be a merged expression
+      auto inst = dyn_cast<Instruction>(input.getSymbolicOperand());
+      if (inst == nullptr)
+        continue;
+
+      if (inst->getParent() ==
+          symbolicComputation.firstInstruction->getParent())
+        continue;
+
+      auto it = symbolicMerges.find(input.getSymbolicOperand());
+      if (it == symbolicMerges.end())
+        continue;
+      if (!DT.dominates(it->second, input.user)) {
+        continue;
+      }
+      input.replaceOperand(it->second);
+      // errs() << "replacing symbolic operand with symbolic merge\n";
+    }
     for (const auto &input : symbolicComputation.inputs) {
       nullChecks.push_back(
           IRB.CreateICmpEQ(nullExpression, input.getSymbolicOperand()));
-      // errs() << " Inserting concreteness null check for " <<
-      // input.concreteValue->getName() << " (ID: " <<
-      // input.concreteValue->getValueID() << ")\n";
     }
     auto *allConcrete = nullChecks[0];
     for (unsigned argIndex = 1; argIndex < nullChecks.size(); argIndex++) {
@@ -162,6 +184,7 @@ void Symbolizer::shortCircuitExpressionUses() {
       auto &argument = symbolicComputation.inputs[argIndex];
       auto *originalArgExpression = argument.getSymbolicOperand();
       auto *argCheckBlock = symbolicComputation.firstInstruction->getParent();
+      DT.recalculate(*argCheckBlock->getParent());
 
       // We only need a run-time check for concreteness if the argument isn't
       // known to be concrete at compile time already. However, there is one
@@ -181,9 +204,18 @@ void Symbolizer::shortCircuitExpressionUses() {
       } else {
         IRB.SetInsertPoint(symbolicComputation.firstInstruction);
       }
-
-      auto *newArgExpression =
-          createValueExpression(argument.concreteValue, IRB);
+      auto concValue = argument.concreteValue;
+      if (auto inst = dyn_cast<Instruction>(concValue)) {
+        auto it = symbolicMerges.find(concValue);
+        if (it != symbolicMerges.end() &&
+            DT.dominates(it->second, argCheckBlock)) {
+          concValue = it->second;
+          // errs() << "Info: Replacing concreteValue: " <<
+          // *argument.concreteValue
+          //        << " with: " << *it->second << "\n";
+        }
+      }
+      auto *newArgExpression = createValueExpression(concValue, IRB);
 
       Value *finalArgExpression;
       if (needRuntimeCheck) {
@@ -211,6 +243,16 @@ void Symbolizer::shortCircuitExpressionUses() {
       finalExpression->addIncoming(
           symbolicComputation.lastInstruction,
           symbolicComputation.lastInstruction->getParent());
+      errs() << "INFO: Replacing lastInstruction: "
+             << *symbolicComputation.lastInstruction
+             << " with: " << *finalExpression << "\n";
+      auto it = symbolicMerges.find(finalExpression);
+      if (it != symbolicMerges.end()) {
+        errs() << "INFO: Symbolic merges " << *it->second << "\n";
+        auto merge = it->second;
+        symbolicMerges.insert(
+            std::make_pair(symbolicComputation.lastInstruction, merge));
+      }
     }
   }
 }
@@ -271,7 +313,7 @@ void Symbolizer::handleCalls(
         if (it == afterCallDependencies->end()) {
           continue;
         }
-        errs() << "we need to split at: " << *instPtr << "\n";
+        // errs() << "we need to split at: " << *instPtr << "\n";
       }
     }
     // TODO: Split and clone block after instruction, symbolize said rest-block
@@ -284,9 +326,9 @@ Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
                                    SmallSet<BasicBlock *, 8> *visited,
                                    Instruction *currentDependency,
                                    DominatorTree &DT) {
-  errs() << "reached " << currentBlock->getName() << "\n";
+  // errs() << "reached " << currentBlock->getName() << "\n";
   if (pred_size(currentBlock) > 1) {
-    errs() << "more than 1 predecessor!\n";
+    // errs() << "more than 1 predecessor!\n";
     auto newPhiNode =
         PHINode::Create(currentDependency->getType(), pred_size(currentBlock));
 
@@ -306,7 +348,7 @@ Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
   }
 
   if (currentBlock == endBlock) {
-    errs() << "reached end block\n";
+    // errs() << "reached end block\n";
     return currentDependency;
   }
 
@@ -320,7 +362,7 @@ Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
       auto result = traverseDownFromBlock(successor, currentBlock, endBlock,
                                           visited, currentDependency, DT);
       if (result != nullptr) {
-        errs() << "got non null result: " << *result << "\n";
+        // errs() << "got non null result: " << *result << "\n";
         return result;
       }
       if (ret == nullptr && result != nullptr) {
@@ -331,8 +373,8 @@ Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
              "Found multiple paths to end block?");
       nonLoopingSuccessors.insert(successor);
     } else {
-      errs() << "Skipping already visited block " << successor->getName()
-             << "\n";
+      // errs() << "Skipping already visited block " << successor->getName()
+      //        << "\n";
       continue;
     }
   }
@@ -406,12 +448,18 @@ void Symbolizer::insertBasicBlockCheck(
      *
      * Handling 2 should re-use part of the logic of 1, so creating separate
      * functions is most likely appropriate
+     *
+     * According to Fabian this block should not be necessary! Actually, given
+     * correct analysis, every analyzed dependency should be dominant and
+     * existant!
      */
     if (auto inst = dyn_cast<Instruction>(finalExpr)) {
       if (B != inst->getParent() && !DT.dominates(inst, B)) {
-        errs() << "no domination!" << *finalExpr << " to block: " << *B << "\n";
-        finalExpr = traverseDownFromInstruction(B, inst, DT);
-        errs() << "built new expression: " << *finalExpr << "\n";
+        errs() << "no domination!" << *finalExpr
+               << " to block: " << B->getName() << "\n";
+        errs() << *inst->getParent() << "\n";
+        // finalExpr = traverseDownFromInstruction(B, inst, DT);
+        // errs() << "built new expression: " << *finalExpr << "\n";
       }
     }
     valueExprList.push_back(finalExpr);
@@ -479,9 +527,11 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
       // need to reference the merge expression here? populateMergeBlock is
       // executed afterwards
-      auto valExpr = createValueExpression(easyRetInst->getReturnValue(), IRB);
-      auto phiNode = IRB.CreatePHI(valExpr->getType(), 2);
-      phiNode->addIncoming(valExpr, easyBlock);
+
+      // when coming from easy block return null expression!
+      auto nullExpr = ConstantPointerNull::get(IRB.getInt8PtrTy());
+      auto phiNode = IRB.CreatePHI(nullExpr->getType(), 2);
+      phiNode->addIncoming(nullExpr, easyBlock);
       phiNode->addIncoming(
           getSymbolicExpressionOrNull(symRetInst->getReturnValue()), symBlock);
       IRB.CreateCall(runtime.setReturnExpression, phiNode);
@@ -614,6 +664,7 @@ void Symbolizer::populateMergeBlock(
     phiNode->addIncoming(easyValue, easyBlock);
     newMappingsFromOriginal.insert(std::make_pair(symValue, phiNode));
     newMappingsFromClone.insert(std::make_pair(easyValue, phiNode));
+    symbolicMerges.insert(std::make_pair(symValue, phiNode));
   }
 
   for (auto &inst : symbolizedBlock->getInstList()) {
@@ -627,7 +678,7 @@ void Symbolizer::populateMergeBlock(
             merge->second->getParent() == mergeBlock) {
           continue;
         }
-        errs() << "merge replace in " << inst << "\n";
+        // errs() << "merge replace in " << inst << "\n";
         inst.setOperand(operand.getOperandNo(), merge->second);
       }
 
@@ -668,15 +719,15 @@ void Symbolizer::populateMergeBlock(
     for (auto phi : replaced) {
       auto phiMap = &phiReplacements[phi];
       phiMap->insert(std::make_pair(value.second, value.first));
-      errs() << "phi replace " << *phi << " {" << *value.second << ": "
-             << *value.first << "}\n";
+      // errs() << "phi replace " << *phi << " {" << *value.second << ": "
+      // << *value.first << "}\n";
     }
   }
 
   auto mergeTerminator = mergeBlock->getTerminator();
   if (mergeTerminator == nullptr) {
-    errs() << "no terminator!!" << '\n';
-    errs() << *mergeBlock << "\n";
+    // errs() << "no terminator!!" << '\n';
+    // errs() << *mergeBlock << "\n";
     return;
   }
   // replace operators in terminator!

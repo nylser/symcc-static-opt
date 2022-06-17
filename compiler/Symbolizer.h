@@ -27,7 +27,7 @@
 #include <optional>
 
 #include "Runtime.h"
-
+using SymbolicMerges = llvm::ValueMap<llvm::Value *, llvm::Instruction *>;
 class SplitData {
 public:
   SplitData(llvm::BasicBlock *checkBlock, llvm::BasicBlock *easyBlock,
@@ -122,21 +122,20 @@ public:
   ///
   /// The resulting code is much longer but avoids solver calls for all
   /// operations without symbolic data.
-  void shortCircuitExpressionUses();
+  void shortCircuitExpressionUses(SymbolicMerges &symbolicMerges,
+                                  llvm::DominatorTree &DT);
 
   void handleCalls(llvm::BasicBlock &B, SplitData &splitData,
                    std::map<llvm::Instruction *, std::list<const llvm::Value *>>
                        *afterCallDependencies);
 
-  void insertBasicBlockCheck(
-      SplitData &splitData, std::list<const llvm::Value *> &dependencies,
-      llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges,
-      llvm::DominatorTree &DT);
+  void insertBasicBlockCheck(SplitData &splitData,
+                             std::list<const llvm::Value *> &dependencies,
+                             SymbolicMerges &symbolicMerges,
+                             llvm::DominatorTree &DT);
   SplitData splitIntoBlocks(llvm::BasicBlock &B);
   void finalizeTerminators(SplitData &splitData);
-  void populateMergeBlock(
-      SplitData &splitData,
-      llvm::ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges);
+  void populateMergeBlock(SplitData &splitData, SymbolicMerges &symbolicMerges);
   void postProcessBasicBlockCheck(llvm::BasicBlock &B);
 
   void handleIntrinsicCall(llvm::CallBase &I);

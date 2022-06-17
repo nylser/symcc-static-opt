@@ -66,6 +66,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
   if (functionName == kSymCtorName)
     return false;
 
+  errs() << "============" << functionName << "============\n";
   // DEBUG(errs() << "Symbolizing function ");
   // DEBUG(errs().write_escaped(functionName) << '\n');
 
@@ -137,17 +138,26 @@ bool SymbolizePass::runOnFunction(Function &F) {
     symbolizer.insertBasicBlockCheck(blockSplitData, dependenciesIt->second,
                                      symbolicMerges, DT);
     symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
-  }
 
-  ///  TODO: do we still need this?
-  symbolizer.shortCircuitExpressionUses();
+    if (blockSplitData.getEasyBlock()->hasNPredecessors(0)) {
+      blockSplitData.getEasyBlock()->removeFromParent();
+    }
+    // if merge block doesnt have any predecessors, we can remove it
+    if (blockSplitData.getMergeBlock()->hasNPredecessors(0)) {
+      blockSplitData.getMergeBlock()->removeFromParent();
+    }
+  }
+  DT.recalculate(F);
+  ///  TODO: do we still need this? Answer: right now, we do. It creates value
+  ///  expressions for otherwise concrete values
+  symbolizer.shortCircuitExpressionUses(symbolicMerges, DT);
   symbolizer.finalizePHINodes(symbolicMerges);
 
-  DEBUG(errs() << F << '\n');
+  // DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());
   // assert(!verifyFunction(F, &errs()) &&
   //        "SymbolizePass produced invalid bitcode");
-
+  errs() << "------------" << F.getName() << "------------\n";
   return true;
 }
 
