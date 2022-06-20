@@ -139,6 +139,8 @@ bool SymbolizePass::runOnFunction(Function &F) {
                                      symbolicMerges, DT);
     symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
 
+    symbolizer.cleanUpSuccessorPHINodes(blockSplitData);
+
     if (blockSplitData.getEasyBlock()->hasNPredecessors(0)) {
       blockSplitData.getEasyBlock()->removeFromParent();
     }

@@ -429,29 +429,11 @@ void Symbolizer::insertBasicBlockCheck(
       }
     }
     /**
-     * @todo Possible concept to implement here:
-     * Check if finalExpr dominates this basic block. If it doesn't there are
-     * multiple cases:
-     * 1. There is a branch right above, with one block containing finalExpr,
-     * and other(s) not containing finalExpr
-     * 2. There is a branch *somewhere* above, but maybe split not directly and
-     * going through another block.
-     * 3. Most probably something went wrong and this finalExpr shouldn't be a
-     * dependency of this block (but might need to rething this, as this is just
-     * a first assessment)
-     *
-     * Handling 1 is trivial, just insert a phi expression and insert nullptr
-     * for those
-     *
-     * 2 however is more tricky. What seems doable is to traverse the tree up to
-     * the finalExpr and insert PHINodes *after* branches
-     *
-     * Handling 2 should re-use part of the logic of 1, so creating separate
-     * functions is most likely appropriate
-     *
      * According to Fabian this block should not be necessary! Actually, given
      * correct analysis, every analyzed dependency should be dominant and
      * existant!
+     * There might be one exception. If a loop introduces new values that might
+     * be symbolic, those might not be defined from the start?
      */
     if (auto inst = dyn_cast<Instruction>(finalExpr)) {
       if (B != inst->getParent() && !DT.dominates(inst, B)) {
@@ -725,11 +707,7 @@ void Symbolizer::populateMergeBlock(
   }
 
   auto mergeTerminator = mergeBlock->getTerminator();
-  if (mergeTerminator == nullptr) {
-    // errs() << "no terminator!!" << '\n';
-    // errs() << *mergeBlock << "\n";
-    return;
-  }
+  assert(mergeTerminator != nullptr && "Terminator of mergeBlock should exist");
   // replace operators in terminator!
   for (auto &operand : mergeTerminator->operands()) {
     if (auto mapping = newMappingsFromClone.find(operand.get());
@@ -739,13 +717,14 @@ void Symbolizer::populateMergeBlock(
   }
 }
 
-void Symbolizer::postProcessBasicBlockCheck(BasicBlock &B) {
-  auto *mergeBlock = B.getSingleSuccessor();
-  if (mergeBlock == nullptr) {
-    return;
+void Symbolizer::cleanUpSuccessorPHINodes(SplitData &splitData) {
+  auto mergeBlock = splitData.getMergeBlock();
+  auto symBlock = splitData.getSymbolizedBlock();
+  for (auto succBlock : successors(mergeBlock)) {
+    for (auto &phi : succBlock->phis()) {
+      phi.replaceIncomingBlockWith(symBlock, mergeBlock);
+    }
   }
-
-  // errs() << *mergeBlock << "\n";
 }
 
 void Symbolizer::handleIntrinsicCall(CallBase &I) {
