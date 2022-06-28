@@ -136,7 +136,8 @@ public:
   SplitData splitIntoBlocks(llvm::BasicBlock &B);
   void finalizeTerminators(SplitData &splitData);
   void populateMergeBlock(SplitData &splitData, SymbolicMerges &symbolicMerges);
-  void cleanUpSuccessorPHINodes(SplitData &splitData);
+  void cleanUpSuccessorPHINodes(SplitData &splitData,
+                                SymbolicMerges &symbolicMerges);
 
   void handleIntrinsicCall(llvm::CallBase &I);
   void handleInlineAssembly(llvm::CallInst &I);

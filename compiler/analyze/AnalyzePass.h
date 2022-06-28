@@ -33,6 +33,7 @@ public:
   AnalyzePass() : ModulePass(ID) {}
 
   bool runOnModule(llvm::Module &M) override;
+  void getAnalysisUsage(llvm::AnalysisUsage &AU) const override;
 
   FunctionAnalysisData *getFunctionAnalysisData(llvm::Function &F);
 

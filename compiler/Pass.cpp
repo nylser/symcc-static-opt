@@ -17,6 +17,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Dominators.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -139,7 +140,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
                                      symbolicMerges, DT);
     symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
 
-    symbolizer.cleanUpSuccessorPHINodes(blockSplitData);
+    symbolizer.cleanUpSuccessorPHINodes(blockSplitData, symbolicMerges);
 
     if (blockSplitData.getEasyBlock()->hasNPredecessors(0)) {
       blockSplitData.getEasyBlock()->removeFromParent();
@@ -154,6 +155,51 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ///  expressions for otherwise concrete values
   symbolizer.shortCircuitExpressionUses(symbolicMerges, DT);
   symbolizer.finalizePHINodes(symbolicMerges);
+  DT.recalculate(F);
+  auto *mod = F.getParent();
+  auto &context = mod->getContext();
+  Type *intType = Type::getInt32Ty(context);
+  std::vector<Type *> printfArgsTypes({Type::getInt8PtrTy(context)});
+  FunctionType *printfType = FunctionType::get(intType, printfArgsTypes, true);
+  auto printfFunc = mod->getOrInsertFunction("printf", printfType);
+
+  IRBuilder<> builder(F.getEntryBlock().getFirstNonPHI());
+  // auto str = builder.CreateGlobalStringPtr("easy execution\n");
+
+  std::set<PHINode *> toRemove;
+  for (auto pair : splitData) {
+    auto blockSplitData = pair->second;
+    auto easyBlock = blockSplitData.getEasyBlock();
+    IRBuilder<> IRB(easyBlock->getFirstNonPHI());
+    // The format string for the printf function, declared as a global literal
+    auto str = builder.CreateGlobalStringPtr(
+        "easy execution of " + blockSplitData.getCheckBlock()->getName().str() +
+        "\n");
+    IRB.CreateCall(printfFunc, {str}, "printf");
+    auto mergeBlock = blockSplitData.getMergeBlock();
+    for (auto &phi : mergeBlock->phis()) {
+      for (auto &incoming : phi.incoming_values()) {
+        if (incoming.get() == nullptr)
+          continue;
+        auto incomingInst = dyn_cast<Instruction>(incoming.get());
+        if (incomingInst == nullptr)
+          continue;
+        if (!DT.dominates(incomingInst,
+                          phi.getIncomingBlock(incoming.getOperandNo())
+                              ->getTerminator())) {
+          errs() << *incomingInst << " doesn't dominate "
+                 << phi.getIncomingBlock(incoming.getOperandNo())->getName()
+                 << "\n";
+          if (phi.isSafeToRemove())
+            toRemove.insert(&phi);
+        }
+      }
+    }
+  }
+  for (auto phi : toRemove) {
+    phi->removeFromParent();
+    phi->dropAllReferences();
+  }
 
   // DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());

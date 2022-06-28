@@ -243,12 +243,12 @@ void Symbolizer::shortCircuitExpressionUses(SymbolicMerges &symbolicMerges,
       finalExpression->addIncoming(
           symbolicComputation.lastInstruction,
           symbolicComputation.lastInstruction->getParent());
-      errs() << "INFO: Replacing lastInstruction: "
-             << *symbolicComputation.lastInstruction
-             << " with: " << *finalExpression << "\n";
+      // errs() << "INFO: Replacing lastInstruction: "
+      //        << *symbolicComputation.lastInstruction
+      //        << " with: " << *finalExpression << "\n";
       auto it = symbolicMerges.find(finalExpression);
       if (it != symbolicMerges.end()) {
-        errs() << "INFO: Symbolic merges " << *it->second << "\n";
+        // errs() << "INFO: Symbolic merges " << *it->second << "\n";
         auto merge = it->second;
         symbolicMerges.insert(
             std::make_pair(symbolicComputation.lastInstruction, merge));
@@ -440,6 +440,18 @@ void Symbolizer::insertBasicBlockCheck(
         errs() << "no domination!" << *finalExpr
                << " to block: " << B->getName() << "\n";
         errs() << *inst->getParent() << "\n";
+        auto phiNode = PHINode::Create(inst->getType(), pred_size(B));
+        for (auto predBlock : predecessors(B)) {
+          if (DT.dominates(inst, predBlock)) {
+            phiNode->addIncoming(inst, predBlock);
+          } else {
+            phiNode->addIncoming(
+                ConstantPointerNull::get(cast<PointerType>(inst->getType())),
+                predBlock);
+          }
+        }
+        B->getInstList().push_front(phiNode);
+        finalExpr = phiNode;
         // finalExpr = traverseDownFromInstruction(B, inst, DT);
         // errs() << "built new expression: " << *finalExpr << "\n";
       }
@@ -471,7 +483,7 @@ void Symbolizer::insertBasicBlockCheck(
       allConcrete = IRB.CreateAnd(allConcrete, nullChecks[argIndex]);
     }
     BranchInst *branchInst =
-        BranchInst::Create(symbolizedBlock, easyBlock, allConcrete);
+        BranchInst::Create(easyBlock, symbolizedBlock, allConcrete);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   } else {
     /// here, we don't have any nullChecks?
@@ -717,12 +729,26 @@ void Symbolizer::populateMergeBlock(
   }
 }
 
-void Symbolizer::cleanUpSuccessorPHINodes(SplitData &splitData) {
+void Symbolizer::cleanUpSuccessorPHINodes(SplitData &splitData,
+                                          SymbolicMerges &symbolicMerges) {
   auto mergeBlock = splitData.getMergeBlock();
   auto symBlock = splitData.getSymbolizedBlock();
+  auto easyBlock = splitData.getEasyBlock();
   for (auto succBlock : successors(mergeBlock)) {
     for (auto &phi : succBlock->phis()) {
       phi.replaceIncomingBlockWith(symBlock, mergeBlock);
+      // remove previously inserted references to the easy block.
+      auto idx = phi.getBasicBlockIndex(easyBlock);
+      if (idx >= 0) {
+        phi.removeIncomingValue(idx);
+      }
+      // fix references from symBlock to mergeBlock (symbolicMerges)
+      for (auto &incoming : phi.incoming_values()) {
+        auto it = symbolicMerges.find(incoming.get());
+        if (it == symbolicMerges.end())
+          continue;
+        phi.setOperand(incoming.getOperandNo(), it->second);
+      }
     }
   }
 }

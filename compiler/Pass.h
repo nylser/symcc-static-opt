@@ -19,8 +19,7 @@
 #include <llvm/IR/ValueMap.h>
 #include <llvm/Pass.h>
 
-class SymbolizePass : public llvm::FunctionPass
-{
+class SymbolizePass : public llvm::FunctionPass {
 public:
   static char ID;
 

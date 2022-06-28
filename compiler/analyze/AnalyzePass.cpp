@@ -43,11 +43,15 @@ bool AnalyzePass::runOnModule(Module &M) {
   /// Sparse value-flow graph (SVFG)
   SVFGBuilder svfBuilder;
   svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
-  for (Function &F : M.getFunctionList()) {
+  for (Function &F : M.functions()) {
+    if (F.size() == 0) {
+      errs() << "skipping empty function: " << F.getName() << "\n";
+      continue;
+    }
+    errs() << "getting function: " << F.getName() << "\n";
+    LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>(F).getLoopInfo();
     FunctionAnalysisData *data = &functionAnalysisData[&F];
-    // errs() << "getting function: " << F.getName() << "\n";
     for (BasicBlock &B : F)
-
     /**
      * @brief For each basic block I want to get the most simplified and
      * summarized values that need to be concreteness-checked. This means on
@@ -58,6 +62,10 @@ bool AnalyzePass::runOnModule(Module &M) {
      * basic block?
      */
     {
+      auto loop = loopInfo.getLoopFor(&B);
+      if (loop != nullptr) {
+        errs() << B.getName() << " loop: " << *loop << "\n";
+      }
       SmallSet<Value *, 8> basicBlockDeps;
       ValueMap<CallInst *, SmallSet<Value *, 8>> callInstDeps;
       CallInst *lastCall = nullptr;
@@ -125,7 +133,7 @@ bool AnalyzePass::runOnModule(Module &M) {
 
       for (auto *topLevelDep : basicBlockTopLevelDeps) {
         topLevelDepsList->push_back(topLevelDep);
-        // errs() << "Dep: " << *topLevelDep << "\n";
+        errs() << "Dep: " << *topLevelDep << "\n";
       }
     }
 
@@ -167,7 +175,10 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
   while (!worklist.empty()) {
     auto *currentNode = worklist.pop();
     if (visited.find(currentNode) != visited.end()) {
-      /** Skip already visited nodes in loops? TODO: What is the consequence **/
+      /** Skip already visited nodes**/
+      // errs() << "Analysis: Skipping already visited node: " << *currentNode
+      //        << "\n";
+      // errs() << "Anaylsis: While analysing: " << *Value << "\n";
       continue;
     }
     visited.insert(currentNode);
@@ -186,7 +197,7 @@ AnalyzePass::traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value) {
       }
       if (auto *inst = dyn_cast<llvm::Instruction>(nodeValue)) {
         if (auto *alloca = dyn_cast<llvm::AllocaInst>(inst)) {
-          // TODO: skip alloca instructions => pointers are always concretized?
+          // skip alloca instructions => pointers are always concrete
           continue;
         }
         if (inst->getParent() != &BB) {
@@ -242,6 +253,11 @@ const SVF::PAGNode *getLHSTopLevPtr(const VFGNode *node) {
                SVFUtil::dyn_cast<NullPtrVFGNode>(node))
     return nullVFG->getPAGNode();
   return nullptr;
+}
+
+void AnalyzePass::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.setPreservesCFG();
+  AU.addRequired<LoopInfoWrapperPass>();
 }
 
 FunctionAnalysisData *AnalyzePass::getFunctionAnalysisData(Function &F) {
