@@ -166,6 +166,11 @@ bool SymbolizePass::runOnFunction(Function &F) {
   IRBuilder<> builder(F.getEntryBlock().getFirstNonPHI());
   // auto str = builder.CreateGlobalStringPtr("easy execution\n");
 
+  /** Primarily removing some generated PHINodes:
+   *  If the incoming value does not dominate the corresponding incoming block,
+   * it's also technically impossible this value would need to be used in
+   * following blocks. This also eliminates domination errors caused by some
+   * generated symbolic merges*/
   std::set<PHINode *> toRemove;
   for (auto pair : splitData) {
     auto blockSplitData = pair->second;
