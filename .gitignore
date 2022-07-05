@@ -47,3 +47,9 @@ build*/
 
 # Mac OS files
 *.DS_Store
+
+# playground
+playground/
+
+# vscode files
+.vscode/

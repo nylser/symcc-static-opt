@@ -66,9 +66,9 @@ ExternalProject_Add(SymRuntime
   BUILD_ALWAYS TRUE)
 
 
-set(SVF_LIB "/usr/local/lib/libSvf.a")
-set(LLVMCudd "/usr/local/lib/libCudd.a")
-set(SVF_HEADER "/usr/local/include/svf")
+set(SVF_LIB "/workspaces/SVF/Release-build/lib/libSvf.a")
+set(LLVMCudd "/workspaces/SVF/Release-build/lib/CUDD/libCudd.a")
+set(SVF_HEADER "/workspaces/SVF/include")
 include_directories(${SVF_HEADER})
 
 ExternalProject_Get_Property(SymRuntime BINARY_DIR)

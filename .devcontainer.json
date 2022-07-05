@@ -1,10 +1,10 @@
 {
-  "image": "symcc_compile",
+  "image": "kstein/symcc_compile",
   "extensions": [
     "ms-vscode.cpptools",
     "ms-vscode.cpptools-extension-pack",
     //"twxs.cmake",
-    "ms-vscode.cmake-tools"
+    "ms-vscode.cmake-tools" 
   ],
   "mounts": [
     "source=/Users/korbinian/dev/llvm_libcxx/,target=/workspaces/llvm/,type=bind,consistency=cached",
