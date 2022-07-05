@@ -753,6 +753,13 @@ void Symbolizer::cleanUpSuccessorPHINodes(SplitData &splitData,
   }
 }
 
+void Symbolizer::insertDebugPrint(BasicBlock *B, Constant *str,
+                                  FunctionCallee &printFunc) {
+  IRBuilder<> IRB(B->getFirstNonPHI());
+  // The format string for the printf function, declared as a global literal
+  IRB.CreateCall(printFunc, {str}, "printf");
+}
+
 void Symbolizer::handleIntrinsicCall(CallBase &I) {
   auto *callee = I.getCalledFunction();
 

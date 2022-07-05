@@ -170,12 +170,10 @@ bool SymbolizePass::runOnFunction(Function &F) {
   for (auto pair : splitData) {
     auto blockSplitData = pair->second;
     auto easyBlock = blockSplitData.getEasyBlock();
-    IRBuilder<> IRB(easyBlock->getFirstNonPHI());
-    // The format string for the printf function, declared as a global literal
     auto str = builder.CreateGlobalStringPtr(
         "easy execution of " + blockSplitData.getCheckBlock()->getName().str() +
         "\n");
-    IRB.CreateCall(printfFunc, {str}, "printf");
+    symbolizer.insertDebugPrint(easyBlock, str, printfFunc);
     auto mergeBlock = blockSplitData.getMergeBlock();
     for (auto &phi : mergeBlock->phis()) {
       for (auto &incoming : phi.incoming_values()) {

@@ -138,6 +138,8 @@ public:
   void populateMergeBlock(SplitData &splitData, SymbolicMerges &symbolicMerges);
   void cleanUpSuccessorPHINodes(SplitData &splitData,
                                 SymbolicMerges &symbolicMerges);
+  void insertDebugPrint(llvm::BasicBlock *B, llvm::Constant *str,
+                        llvm::FunctionCallee &printFunc);
 
   void handleIntrinsicCall(llvm::CallBase &I);
   void handleInlineAssembly(llvm::CallInst &I);
