@@ -97,9 +97,12 @@ bool SymbolizePass::runOnFunction(Function &F) {
     if (anaDataIt->second.empty()) {
       symbolizer.insertBasicBlockNotification(*basicBlock);
     } else {
-      auto data = symbolizer.splitIntoBlocks(*basicBlock);
-      splitData.insert(std::make_pair(basicBlock, data));
-      symbolizer.insertBasicBlockNotification(*data.getSymbolizedBlock());
+      auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
+      splitData.insert(std::make_pair(basicBlock, blockSplitData));
+      symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);
+
+      symbolizer.insertBasicBlockNotification(
+          *blockSplitData.getSymbolizedBlock());
     }
   }
 

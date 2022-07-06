@@ -44,6 +44,31 @@ public:
   std::list<llvm::StoreInst *> storesToInstrument;
   llvm::ValueToValueMapTy *getVMap();
 
+  /// if the terminator was modified by block-internal splitting, we keep
+  /// reference of the actual, final terminator here.
+  llvm::Instruction *modifiedEasyTerminator;
+  /// if the easyBlock is subject block-internal splitting, we keep
+  /// reference of the actual, final block of splitting here.
+  llvm::BasicBlock *modifiedEasyEndBlock;
+  /// a list of basicBlocks, created by block-internal splitting that need to be
+  /// run through the symbolizer
+  std::list<llvm::BasicBlock *> blocksToBeSymbolized;
+
+  /// lists splitData created in easyBlock due to block-internal splitting
+  /// this should be in the order the splits appear in
+  /// if there are more than 1 split, then every split is nested in its
+  /// successors
+  /// easyBlock
+  ///   -> split[0]
+  ///     | split[0].symBlock
+  ///     | split[0].easyBlock
+  ///     |  -> split[1]
+  ///     |    | split[1].easyBlock
+  ///     |    |  split[1].symBlock
+  ///     |    |> split[1].mergeBlock
+  ///     |> split[0].mergeBlok
+  std::list<SplitData> internalSplits;
+
 private:
   llvm::BasicBlock *m_checkBlock;
   llvm::BasicBlock *m_symbolizedBlock;
@@ -125,9 +150,14 @@ public:
   void shortCircuitExpressionUses(SymbolicMerges &symbolicMerges,
                                   llvm::DominatorTree &DT);
 
-  void handleCalls(llvm::BasicBlock &B, SplitData &splitData,
+  ///
+  /// Handle block splitting at call instruction. This takes a map of terminator
+  /// references to keep track of the final terminator for later use in
+  /// `handleTerminators()`
+  ///
+  void handleCalls(SplitData &splitData,
                    std::map<llvm::Instruction *, std::list<const llvm::Value *>>
-                       *afterCallDependencies);
+                       &afterCallDependencies);
 
   void insertBasicBlockCheck(SplitData &splitData,
                              std::list<const llvm::Value *> &dependencies,

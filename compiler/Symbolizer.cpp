@@ -301,23 +301,42 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
 }
 
 void Symbolizer::handleCalls(
-    BasicBlock &B, SplitData &splitData,
+    SplitData &splitData,
     std::map<llvm::Instruction *, std::list<const llvm::Value *>>
-        *afterCallDependencies) {
+        &afterCallDependencies) {
   auto VMap = splitData.getVMap();
   for (auto pair : *VMap) {
-    if (auto *instPtr = dyn_cast<Instruction>(pair->first)) {
-      if (instPtr->getParent() == &B) {
-        auto it =
-            afterCallDependencies->find(const_cast<Instruction *>(instPtr));
-        if (it == afterCallDependencies->end()) {
-          continue;
-        }
-        // errs() << "we need to split at: " << *instPtr << "\n";
-      }
-    }
-    // TODO: Split and clone block after instruction, symbolize said rest-block
-    // (or their memory accesses)
+    auto *instPtr = dyn_cast<Instruction>(pair->first);
+    if (instPtr == nullptr)
+      continue;
+    if (instPtr->getParent() != splitData.getSymbolizedBlock())
+      continue;
+
+    auto dependenciesEntry =
+        afterCallDependencies.find(const_cast<Instruction *>(instPtr));
+    // check if this instruction is contained in afterCallDependencies;
+    if (dependenciesEntry == afterCallDependencies.end())
+      continue;
+
+    // get reference to actual instruction in easyBlock
+    auto *easyBlockInstPtr = dyn_cast<Instruction>(pair->second);
+    // here we want to split the current block after the call
+    // instruction and clone until the end
+    auto *nextInstPtr =
+        const_cast<Instruction *>(easyBlockInstPtr->getNextNode());
+    // splitting nextInstPtr parent, because it might have already been
+    // split (reference to easy block doesn't work here, creates infinite
+    // loop)
+    errs() << "Splitting block: " << nextInstPtr->getParent()->getName()
+           << " at " << *nextInstPtr << "\n";
+    assert(nextInstPtr != nullptr);
+    auto newSymBlock = SplitBlock(nextInstPtr->getParent(), nextInstPtr);
+    newSymBlock->setName(nextInstPtr->getParent()->getName() +
+                         ".callSplit.symbolized");
+    ValueToValueMapTy VMap;
+    auto newEasyBlock = CloneBasicBlock(newSymBlock, VMap, "easy");
+    auto newMergeBlock = BasicBlock::Create(
+        nextInstPtr->getContext(), nextInstPtr->getParent()->getName());
   }
 }
 

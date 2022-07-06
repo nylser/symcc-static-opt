@@ -75,7 +75,7 @@ bool AnalyzePass::runOnModule(Module &M) {
 
         if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
           basicBlockDeps.insert(&I);
-          // collect call operands
+          // collect dependencies after call
           if (lastCall != nullptr) {
             errs() << "have last call " << *lastCall << "\n";
             auto callInstDepList = &callInstDeps[lastCall];
