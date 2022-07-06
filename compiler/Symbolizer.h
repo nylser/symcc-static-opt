@@ -27,6 +27,12 @@
 #include <optional>
 
 #include "Runtime.h"
+
+struct InnerSplit {
+  llvm::BasicBlock *easyBlock;
+  llvm::BasicBlock *symbolizedBlock;
+};
+
 using SymbolicMerges = llvm::ValueMap<llvm::Value *, llvm::Instruction *>;
 class SplitData {
 public:
@@ -44,30 +50,22 @@ public:
   std::list<llvm::StoreInst *> storesToInstrument;
   llvm::ValueToValueMapTy *getVMap();
 
-  /// if the terminator was modified by block-internal splitting, we keep
-  /// reference of the actual, final terminator here.
-  llvm::Instruction *modifiedEasyTerminator;
   /// if the easyBlock is subject block-internal splitting, we keep
   /// reference of the actual, final block of splitting here.
   llvm::BasicBlock *modifiedEasyEndBlock;
-  /// a list of basicBlocks, created by block-internal splitting that need to be
-  /// run through the symbolizer
-  std::list<llvm::BasicBlock *> blocksToBeSymbolized;
 
-  /// lists splitData created in easyBlock due to block-internal splitting
-  /// this should be in the order the splits appear in
-  /// if there are more than 1 split, then every split is nested in its
-  /// successors
-  /// easyBlock
+  /// lists sym and easy blocks created in easyBlock due to block-internal
+  /// splitting this should be in the order the splits appear in if there are
+  /// more than 1 split, then every split is nested in its successors easyBlock
   ///   -> split[0]
-  ///     | split[0].symBlock
-  ///     | split[0].easyBlock
-  ///     |  -> split[1]
-  ///     |    | split[1].easyBlock
-  ///     |    |  split[1].symBlock
-  ///     |    |> split[1].mergeBlock
-  ///     |> split[0].mergeBlok
-  std::list<SplitData> internalSplits;
+  ///     split[0].symbolizedBlock
+  ///     split[0].easyBlock
+  ///      -> split[1]
+  ///         split[1].symbolizedBlock
+  ///         split[1].easyBlock
+  /// => mergeBlock, minimum: merging incoming from split[0].symbolizedBlock,
+  /// split[1].symbolizedBlock and split[1].easyBlock
+  std::list<InnerSplit> internalSplits;
 
 private:
   llvm::BasicBlock *m_checkBlock;
