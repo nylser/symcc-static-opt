@@ -90,17 +90,16 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ValueMap<BasicBlock *, SplitData> splitData;
 
   for (auto basicBlock : allBasicBlocks) {
+    symbolizer.insertBasicBlockNotification(*basicBlock);
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
     if (anaDataIt->second.empty()) {
       symbolizer.insertBasicBlockNotification(*basicBlock);
     } else {
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
-      blockSplitData = symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);
+      blockSplitData =
+          symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);
       splitData.insert(std::make_pair(basicBlock, blockSplitData));
-
-      symbolizer.insertBasicBlockNotification(
-          *blockSplitData.getSymbolizedBlock());
     }
   }
 
