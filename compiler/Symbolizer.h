@@ -28,9 +28,15 @@
 
 #include "Runtime.h"
 
-struct InnerSplit {
+class InnerSplit {
+public:
+  InnerSplit(llvm::BasicBlock *easyBlock, llvm::BasicBlock *symbolizedBlock,
+             llvm::ValueToValueMapTy &symbolizedVMap)
+      : easyBlock(easyBlock), symbolizedBlock(symbolizedBlock),
+        symbolizedVMap(symbolizedVMap){};
   llvm::BasicBlock *easyBlock;
   llvm::BasicBlock *symbolizedBlock;
+  llvm::ValueToValueMapTy &symbolizedVMap;
 };
 
 using SymbolicMerges = llvm::ValueMap<llvm::Value *, llvm::Instruction *>;
@@ -39,8 +45,9 @@ public:
   SplitData(llvm::BasicBlock *checkBlock, llvm::BasicBlock *easyBlock,
             llvm::BasicBlock *symbolizedBlock, llvm::BasicBlock *mergeBlock,
             llvm::ValueToValueMapTy *VMap)
-      : m_checkBlock(checkBlock), m_symbolizedBlock(symbolizedBlock),
-        m_easyBlock(easyBlock), m_mergeBlock(mergeBlock), m_VMap(VMap){};
+      : modifiedEasyEndBlock(nullptr), m_checkBlock(checkBlock),
+        m_symbolizedBlock(symbolizedBlock), m_easyBlock(easyBlock),
+        m_mergeBlock(mergeBlock), m_VMap(VMap){};
 
   llvm::BasicBlock *getCheckBlock();
   llvm::BasicBlock *getEasyBlock();
@@ -153,9 +160,18 @@ public:
   /// references to keep track of the final terminator for later use in
   /// `handleTerminators()`
   ///
-  void handleCalls(SplitData &splitData,
-                   std::map<llvm::Instruction *, std::list<const llvm::Value *>>
-                       &afterCallDependencies);
+  SplitData
+  handleCalls(SplitData &splitData,
+              std::map<llvm::Instruction *, std::list<const llvm::Value *>>
+                  &afterCallDependencies);
+
+  ///
+  /// Split an easy block at the given instruction, creating a new symbolic and
+  /// a new easy block.
+  ///
+  InnerSplit splitAtInstruction(SplitData &splitData,
+                                llvm::Instruction *splitInstPtr,
+                                std::string splitName);
 
   void insertBasicBlockCheck(SplitData &splitData,
                              std::list<const llvm::Value *> &dependencies,

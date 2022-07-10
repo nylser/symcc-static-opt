@@ -78,8 +78,6 @@ bool SymbolizePass::runOnFunction(Function &F) {
     allBasicBlocks.push_back(&B);
   }
   allInstructions.reserve(F.getInstructionCount());
-  for (auto &I : instructions(F))
-    allInstructions.push_back(&I);
 
   Symbolizer symbolizer(*F.getParent());
   symbolizer.symbolizeFunctionArguments(F);
@@ -98,11 +96,27 @@ bool SymbolizePass::runOnFunction(Function &F) {
       symbolizer.insertBasicBlockNotification(*basicBlock);
     } else {
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
+      blockSplitData = symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);
       splitData.insert(std::make_pair(basicBlock, blockSplitData));
-      symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);
 
       symbolizer.insertBasicBlockNotification(
           *blockSplitData.getSymbolizedBlock());
+    }
+  }
+
+  for (auto &B : allBasicBlocks) {
+    auto blockSplitDataIt = splitData.find(B);
+    if (blockSplitDataIt == splitData.end()) {
+      for (auto &I : B->getInstList())
+        allInstructions.push_back(&I);
+      continue;
+    }
+
+    for (auto &I : blockSplitDataIt->second.getSymbolizedBlock()->getInstList())
+      allInstructions.push_back(&I);
+    for (auto &internalSplit : blockSplitDataIt->second.internalSplits) {
+      for (auto &I : internalSplit.symbolizedBlock->getInstList())
+        allInstructions.push_back(&I);
     }
   }
 

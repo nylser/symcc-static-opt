@@ -300,7 +300,7 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
   return data;
 }
 
-void Symbolizer::handleCalls(
+SplitData Symbolizer::handleCalls(
     SplitData &splitData,
     std::map<llvm::Instruction *, std::list<const llvm::Value *>>
         &afterCallDependencies) {
@@ -330,14 +330,41 @@ void Symbolizer::handleCalls(
     errs() << "Splitting block: " << nextInstPtr->getParent()->getName()
            << " at " << *nextInstPtr << "\n";
     assert(nextInstPtr != nullptr);
-    auto newSymBlock = SplitBlock(nextInstPtr->getParent(), nextInstPtr);
-    newSymBlock->setName(nextInstPtr->getParent()->getName() +
-                         ".callSplit.symbolized");
-    ValueToValueMapTy VMap;
-    auto newEasyBlock = CloneBasicBlock(newSymBlock, VMap, "easy");
-    auto newMergeBlock = BasicBlock::Create(
-        nextInstPtr->getContext(), nextInstPtr->getParent()->getName());
+
+    auto split = splitAtInstruction(splitData, nextInstPtr, ".callSplit");
+
+    splitData.internalSplits.push_back(split);
+    splitData.modifiedEasyEndBlock = split.easyBlock;
   }
+  return splitData;
+}
+
+InnerSplit Symbolizer::splitAtInstruction(SplitData &splitData,
+                                          Instruction *splitInstPtr,
+                                          std::string splitName) {
+  auto newEasyBlock =
+      SplitBlock(splitInstPtr->getParent(), splitInstPtr, nullptr, nullptr, nullptr,
+                 splitData.getEasyBlock()->getName() + splitName);
+  ValueToValueMapTy VMap;
+  auto newSymBlock = CloneBasicBlock(newEasyBlock, VMap, ".symbolized",
+                                     newEasyBlock->getParent());
+
+  // updating inner references
+  for (auto &inst : newSymBlock->getInstList()) {
+    for (auto &operand : inst.operands()) {
+      if (auto *value = operand.get(); value != nullptr) {
+        if (auto mappedValue = VMap.find(value); mappedValue != VMap.end()) {
+          inst.setOperand(operand.getOperandNo(), mappedValue->second);
+        }
+      }
+    }
+  }
+
+  newEasyBlock->setName(newEasyBlock->getName() + ".easy");
+  newSymBlock->moveAfter(newEasyBlock);
+
+  InnerSplit split(newEasyBlock, newSymBlock, VMap);
+  return split;
 }
 
 Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
@@ -517,6 +544,7 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
   auto symBlock = splitData.getSymbolizedBlock();
   auto easyBlock = splitData.getEasyBlock();
+
   auto mergeBlock = splitData.getMergeBlock();
   auto easyTerminator = easyBlock->getTerminator();
   auto symTerminator = symBlock->getTerminator();
