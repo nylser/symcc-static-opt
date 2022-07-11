@@ -343,17 +343,17 @@ InnerSplit Symbolizer::splitAtInstruction(SplitData &splitData,
                                           Instruction *splitInstPtr,
                                           std::string splitName) {
   auto newEasyBlock =
-      SplitBlock(splitInstPtr->getParent(), splitInstPtr, nullptr, nullptr, nullptr,
-                 splitData.getEasyBlock()->getName() + splitName);
-  ValueToValueMapTy VMap;
-  auto newSymBlock = CloneBasicBlock(newEasyBlock, VMap, ".symbolized",
+      SplitBlock(splitInstPtr->getParent(), splitInstPtr, nullptr, nullptr,
+                 nullptr, splitData.getEasyBlock()->getName() + splitName);
+  ValueToValueMapTy *VMap = new ValueToValueMapTy();
+  auto newSymBlock = CloneBasicBlock(newEasyBlock, *VMap, ".symbolized",
                                      newEasyBlock->getParent());
 
   // updating inner references
   for (auto &inst : newSymBlock->getInstList()) {
     for (auto &operand : inst.operands()) {
       if (auto *value = operand.get(); value != nullptr) {
-        if (auto mappedValue = VMap.find(value); mappedValue != VMap.end()) {
+        if (auto mappedValue = VMap->find(value); mappedValue != VMap->end()) {
           inst.setOperand(operand.getOperandNo(), mappedValue->second);
         }
       }
@@ -544,9 +544,13 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
   auto symBlock = splitData.getSymbolizedBlock();
   auto easyBlock = splitData.getEasyBlock();
+  auto modifiedEasyEnd = splitData.modifiedEasyEndBlock;
 
   auto mergeBlock = splitData.getMergeBlock();
   auto easyTerminator = easyBlock->getTerminator();
+  if (modifiedEasyEnd != nullptr)
+    easyTerminator = modifiedEasyEnd->getTerminator();
+
   auto symTerminator = symBlock->getTerminator();
 
   if (auto easyRetInst = dyn_cast<ReturnInst>(easyTerminator)) {
@@ -557,27 +561,36 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
     assert(symRetInst != nullptr);
     IRBuilder<> IRB(mergeBlock);
     if (symRetInst->getReturnValue() != nullptr) {
-      auto setReturnExpr = dyn_cast<CallInst>(symRetInst->getPrevNode());
-      assert(setReturnExpr != nullptr);
-
-      /// theoretical handling possibility:
-      /// take the setReturnExpression() call and move it to the merge block
-      /// generate a value expression for the "return-value" of the easy block
-      /// phinode: if from sym, use original expression, if from easy use
-      /// generated valueExpression
-
-      // need to reference the merge expression here? populateMergeBlock is
-      // executed afterwards
-
-      // when coming from easy block return null expression!
       auto nullExpr = ConstantPointerNull::get(IRB.getInt8PtrTy());
       auto phiNode = IRB.CreatePHI(nullExpr->getType(), 2);
+
+      // when coming from easy block return null expression!
       phiNode->addIncoming(nullExpr, easyBlock);
+
+      // add returnExpression call
+      auto setReturnExpr = dyn_cast<CallInst>(symRetInst->getPrevNode());
+      assert(setReturnExpr != nullptr);
       phiNode->addIncoming(
           getSymbolicExpressionOrNull(symRetInst->getReturnValue()), symBlock);
+      ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
+
+      // do the above for all internalSplits
+      for (auto split : splitData.internalSplits) {
+        auto symRetInst =
+            dyn_cast<ReturnInst>(split.symbolizedBlock->getTerminator());
+        if (symRetInst == nullptr)
+          ;
+        continue;
+        auto setReturnExpr = dyn_cast<CallInst>(symRetInst->getPrevNode());
+        assert(setReturnExpr != nullptr);
+        phiNode->addIncoming(
+            getSymbolicExpressionOrNull(symRetInst->getReturnValue()),
+            symBlock);
+        ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
+      }
+
       IRB.CreateCall(runtime.setReturnExpression, phiNode);
       IRB.CreateRet(easyRetInst->getReturnValue());
-      ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
       ReplaceInstWithInst(easyRetInst, BranchInst::Create(mergeBlock));
     } else {
       IRB.CreateRet(symRetInst->getReturnValue());
@@ -600,6 +613,7 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
     /// sure to use the merged address in the terminator!
 
   } else if (auto easyInvokeInst = dyn_cast<InvokeInst>(easyTerminator)) {
+    // TODO: Handle internalSplits
     auto symInvokeInst = dyn_cast<InvokeInst>(symTerminator);
     assert(symInvokeInst != nullptr);
     /// invoke instruction is more complicated due to the way it is handled by
@@ -672,6 +686,12 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
     ReplaceInstWithInst(symBlock->getTerminator(),
                         BranchInst::Create(mergeBlock));
+
+    // also replace terminator for every internally split symbolic block
+    for (auto split : splitData.internalSplits)
+      ReplaceInstWithInst(split.symbolizedBlock->getTerminator(),
+                          BranchInst::Create(mergeBlock));
+
     ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
 
     mergeBlock->getInstList().push_back(newTerminator);
@@ -685,6 +705,9 @@ void Symbolizer::populateMergeBlock(
   auto mergeBlock = splitData.getMergeBlock();
   auto symbolizedBlock = splitData.getSymbolizedBlock();
   auto easyBlock = splitData.getEasyBlock();
+  if (splitData.modifiedEasyEndBlock != nullptr)
+    easyBlock = splitData.modifiedEasyEndBlock;
+
   IRBuilder<> IRB(&*mergeBlock->getFirstInsertionPt());
 
   auto *nullExpression = ConstantPointerNull::get(IRB.getInt8PtrTy());
@@ -703,6 +726,23 @@ void Symbolizer::populateMergeBlock(
         IRB.CreatePHI(symValue->getType(), 2, symValue->getName() + ".merge");
     phiNode->addIncoming(symValue, symbolizedBlock);
     phiNode->addIncoming(easyValue, easyBlock);
+
+    // add values from internal split symbolized blocks
+    for (auto innerSplit : splitData.internalSplits) {
+      assert(value.second.pointsToAliveValue());
+      const Value *easyValue = value.second;
+      auto innerSplitValueIt = innerSplit.symbolizedVMap->find(easyValue);
+      if (innerSplitValueIt == innerSplit.symbolizedVMap->end()) {
+        // value must have been created before the split -> add already found
+        // symValue for incoming block;
+        phiNode->addIncoming(symValue, innerSplit.symbolizedBlock);
+      } else {
+        // using value that was created in the "split-off" block
+        phiNode->addIncoming(innerSplitValueIt->second,
+                             innerSplit.symbolizedBlock);
+      }
+    }
+
     newMappingsFromOriginal.insert(std::make_pair(symValue, phiNode));
     newMappingsFromClone.insert(std::make_pair(easyValue, phiNode));
     symbolicMerges.insert(std::make_pair(symValue, phiNode));
@@ -727,6 +767,8 @@ void Symbolizer::populateMergeBlock(
       PHINode *phiNode = IRB.CreatePHI(inst.getType(), 2, "symmerge");
       phiNode->addIncoming(&inst, symbolizedBlock);
       phiNode->addIncoming(nullExpression, easyBlock);
+      for (auto innerSplit : splitData.internalSplits)
+        phiNode->addIncoming(nullExpression, innerSplit.symbolizedBlock);
       symbolicMerges.insert(std::make_pair(&inst, phiNode));
     }
   }

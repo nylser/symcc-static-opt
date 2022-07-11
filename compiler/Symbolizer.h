@@ -31,12 +31,12 @@
 class InnerSplit {
 public:
   InnerSplit(llvm::BasicBlock *easyBlock, llvm::BasicBlock *symbolizedBlock,
-             llvm::ValueToValueMapTy &symbolizedVMap)
+             llvm::ValueToValueMapTy *symbolizedVMap)
       : easyBlock(easyBlock), symbolizedBlock(symbolizedBlock),
         symbolizedVMap(symbolizedVMap){};
   llvm::BasicBlock *easyBlock;
   llvm::BasicBlock *symbolizedBlock;
-  llvm::ValueToValueMapTy &symbolizedVMap;
+  llvm::ValueToValueMapTy *symbolizedVMap;
 };
 
 using SymbolicMerges = llvm::ValueMap<llvm::Value *, llvm::Instruction *>;
