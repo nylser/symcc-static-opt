@@ -97,8 +97,9 @@ bool SymbolizePass::runOnFunction(Function &F) {
       symbolizer.insertBasicBlockNotification(*basicBlock);
     } else {
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
-      blockSplitData =
-          symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);
+      /*blockSplitData =
+          symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);*/
+      blockSplitData = symbolizer.splitAtLoads(blockSplitData);
       splitData.insert(std::make_pair(basicBlock, blockSplitData));
     }
   }
@@ -158,6 +159,9 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     symbolizer.cleanUpSuccessorPHINodes(blockSplitData, symbolicMerges);
 
+    // if there are internal splits, don't remove any blocks?
+    if (blockSplitData.internalSplits.size() > 0)
+      continue;
     if (blockSplitData.getEasyBlock()->hasNPredecessors(0)) {
       blockSplitData.getEasyBlock()->removeFromParent();
     }

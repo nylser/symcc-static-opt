@@ -339,12 +339,33 @@ SplitData Symbolizer::handleCalls(
   return splitData;
 }
 
+SplitData Symbolizer::splitAtLoads(SplitData &splitData) {
+  SmallVector<Instruction *, 0> splitPoints;
+  // find all the instructions that need a split
+  for (auto &instruction : splitData.getEasyBlock()->getInstList()) {
+    auto *loadInstPtr = dyn_cast<LoadInst>(&instruction);
+    if (loadInstPtr == nullptr)
+      continue;
+    auto *splitPoint = loadInstPtr->getNextNode();
+    assert(splitPoint != nullptr && "Instruction after load is non existant");
+    splitPoints.push_back(splitPoint);
+  }
+
+  for (auto *splitPoint : splitPoints) {
+    auto innerSplit = splitAtInstruction(splitData, splitPoint, ".loadSplit");
+
+    splitData.internalSplits.push_back(innerSplit);
+    splitData.modifiedEasyEndBlock = innerSplit.easyBlock;
+  }
+  return splitData;
+}
+
 InnerSplit Symbolizer::splitAtInstruction(SplitData &splitData,
                                           Instruction *splitInstPtr,
                                           std::string splitName) {
   auto newEasyBlock =
       SplitBlock(splitInstPtr->getParent(), splitInstPtr, nullptr, nullptr,
-                 nullptr, splitData.getEasyBlock()->getName() + splitName);
+                 nullptr, splitInstPtr->getParent()->getName() + splitName);
   ValueToValueMapTy *VMap = new ValueToValueMapTy();
   auto newSymBlock = CloneBasicBlock(newEasyBlock, *VMap, ".symbolized",
                                      newEasyBlock->getParent());
@@ -363,7 +384,7 @@ InnerSplit Symbolizer::splitAtInstruction(SplitData &splitData,
   newEasyBlock->setName(newEasyBlock->getName() + ".easy");
   newSymBlock->moveAfter(newEasyBlock);
 
-  InnerSplit split(newEasyBlock, newSymBlock, VMap);
+  InnerSplit split(newEasyBlock, newSymBlock, VMap, splitInstPtr);
   return split;
 }
 
@@ -748,30 +769,61 @@ void Symbolizer::populateMergeBlock(
     symbolicMerges.insert(std::make_pair(symValue, phiNode));
   }
 
+  // pre stage, holding on the iterator that will be inserted on the
+  // next "regular" instruction
+  std::optional<BasicBlock::iterator> preSplitIterator;
+  std::vector<BasicBlock::iterator> splitIterators;
+
   for (auto &inst : symbolizedBlock->getInstList()) {
-    if (VMap->find(&inst) == VMap->end() &&
-        &inst != symbolizedBlock->getTerminator() &&
-        inst.getType() == IRB.getInt8PtrTy()) {
-
-      for (auto &operand : inst.operands()) {
-        auto merge = symbolicMerges.find(operand.get());
-        if (merge == symbolicMerges.end() ||
-            merge->second->getParent() == mergeBlock) {
-          continue;
+    {
+      auto easyMappedInstIt = VMap->find(&inst);
+      if (easyMappedInstIt != VMap->end() ||
+          &inst == symbolizedBlock->getTerminator() ||
+          inst.getType() != IRB.getInt8PtrTy()) {
+        // if we have reached a splitPoint, add symbolic block instruction
+        // iterator to splitIterators
+        if (preSplitIterator.has_value()) {
+          splitIterators.push_back(preSplitIterator.value());
+          preSplitIterator.reset();
         }
-        // errs() << "merge replace in " << inst << "\n";
-        inst.setOperand(operand.getOperandNo(), merge->second);
+        for (auto innerSplit : splitData.internalSplits) {
+          if (easyMappedInstIt->second == innerSplit.splitPoint)
+            preSplitIterator.emplace(innerSplit.symbolizedBlock->begin());
+        }
+        continue;
       }
+    }
 
-      // errs() << "got new value: " << inst << "\n";
-      PHINode *phiNode = IRB.CreatePHI(inst.getType(), 2, "symmerge");
-      phiNode->addIncoming(&inst, symbolizedBlock);
-      phiNode->addIncoming(nullExpression, easyBlock);
-      for (auto innerSplit : splitData.internalSplits)
-        phiNode->addIncoming(nullExpression, innerSplit.symbolizedBlock);
-      symbolicMerges.insert(std::make_pair(&inst, phiNode));
+    // replace operands of symbolic computations with previously merged symbolic
+    // values
+    for (auto &operand : inst.operands()) {
+      auto merge = symbolicMerges.find(operand.get());
+      // don't replace operands that are merged in the current mergeBlock
+      if (merge == symbolicMerges.end() ||
+          merge->second->getParent() == mergeBlock)
+        continue;
+
+      inst.setOperand(operand.getOperandNo(), merge->second);
+    }
+
+    PHINode *phiNode = IRB.CreatePHI(inst.getType(), 2, "symmerge");
+
+    // symbolic computation value exists in the symbolizedBlock
+    phiNode->addIncoming(&inst, symbolizedBlock);
+
+    // no symbolic computation value exists for this in the easyBlock
+    phiNode->addIncoming(nullExpression, easyBlock);
+
+    // handling block-internal splits:
+    // needs to map the computations of these
+    // symbolic blocks to the ones already created in the regular symbolic block
+    for (size_t i = 0; i < splitIterators.size(); i++) {
+      auto currentInstIt = splitIterators[i];
+      // phiNode->addIncoming(&*currentInstIt, currentInstIt->getParent());
+      splitIterators[i] = std::next(currentInstIt);
     }
   }
+
   // replace uses of old values with new PHINodes
   for (auto value : newMappingsFromOriginal) {
     std::vector<PHINode *> replaced;

@@ -31,12 +31,14 @@
 class InnerSplit {
 public:
   InnerSplit(llvm::BasicBlock *easyBlock, llvm::BasicBlock *symbolizedBlock,
-             llvm::ValueToValueMapTy *symbolizedVMap)
+             llvm::ValueToValueMapTy *symbolizedVMap,
+             llvm::Instruction *splitPoint)
       : easyBlock(easyBlock), symbolizedBlock(symbolizedBlock),
-        symbolizedVMap(symbolizedVMap){};
+        symbolizedVMap(symbolizedVMap), splitPoint(splitPoint){};
   llvm::BasicBlock *easyBlock;
   llvm::BasicBlock *symbolizedBlock;
   llvm::ValueToValueMapTy *symbolizedVMap;
+  llvm::Instruction *splitPoint;
 };
 
 using SymbolicMerges = llvm::ValueMap<llvm::Value *, llvm::Instruction *>;
@@ -165,6 +167,7 @@ public:
               std::map<llvm::Instruction *, std::list<const llvm::Value *>>
                   &afterCallDependencies);
 
+  SplitData splitAtLoads(SplitData &splitData);
   ///
   /// Split an easy block at the given instruction, creating a new symbolic and
   /// a new easy block.
