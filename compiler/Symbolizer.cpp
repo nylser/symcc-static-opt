@@ -340,19 +340,36 @@ SplitData Symbolizer::handleCalls(
 }
 
 SplitData Symbolizer::splitAtLoads(SplitData &splitData) {
-  SmallVector<Instruction *, 0> splitPoints;
+  SmallVector<LoadInst *, 0> loadInstructions;
   // find all the instructions that need a split
   for (auto &instruction : splitData.getEasyBlock()->getInstList()) {
     auto *loadInstPtr = dyn_cast<LoadInst>(&instruction);
     if (loadInstPtr == nullptr)
       continue;
-    auto *splitPoint = loadInstPtr->getNextNode();
-    assert(splitPoint != nullptr && "Instruction after load is non existant");
-    splitPoints.push_back(splitPoint);
+    loadInstructions.push_back(loadInstPtr);
   }
 
-  for (auto *splitPoint : splitPoints) {
+  for (auto *loadInstPtr : loadInstructions) {
+    auto *splitPoint = loadInstPtr->getNextNode();
+    assert(splitPoint != nullptr && "Instruction after load is non existant");
+
+    // run symbolizer on load instruction, this should create the expression we
+    // need for the concreteness check
+    visitLoadInst(*loadInstPtr);
+
     auto innerSplit = splitAtInstruction(splitData, splitPoint, ".loadSplit");
+
+    auto expression = symbolicExpressions[loadInstPtr];
+    auto terminator = loadInstPtr->getParent()->getTerminator();
+    assert(terminator != nullptr);
+    assert(expression != nullptr);
+    // concreteness check for symbolic load expression;
+    IRBuilder IRB(terminator);
+    auto nullExpr = ConstantPointerNull::get(IRB.getInt8PtrTy());
+    auto eqInst = IRB.CreateICmpEQ(expression, nullExpr);
+    ReplaceInstWithInst(terminator,
+                        BranchInst::Create(innerSplit.easyBlock,
+                                           innerSplit.symbolizedBlock, eqInst));
 
     splitData.internalSplits.push_back(innerSplit);
     splitData.modifiedEasyEndBlock = innerSplit.easyBlock;
@@ -382,7 +399,7 @@ InnerSplit Symbolizer::splitAtInstruction(SplitData &splitData,
   }
 
   newEasyBlock->setName(newEasyBlock->getName() + ".easy");
-  newSymBlock->moveAfter(newEasyBlock);
+  newSymBlock->moveBefore(newEasyBlock);
 
   InnerSplit split(newEasyBlock, newSymBlock, VMap, splitInstPtr);
   return split;
@@ -751,12 +768,12 @@ void Symbolizer::populateMergeBlock(
     // add values from internal split symbolized blocks
     for (auto innerSplit : splitData.internalSplits) {
       assert(value.second.pointsToAliveValue());
-      const Value *easyValue = value.second;
+      Value *easyValue = const_cast<Value *>(&*value.second);
       auto innerSplitValueIt = innerSplit.symbolizedVMap->find(easyValue);
       if (innerSplitValueIt == innerSplit.symbolizedVMap->end()) {
         // value must have been created before the split -> add already found
         // symValue for incoming block;
-        phiNode->addIncoming(symValue, innerSplit.symbolizedBlock);
+        phiNode->addIncoming(easyValue, innerSplit.symbolizedBlock);
       } else {
         // using value that was created in the "split-off" block
         phiNode->addIncoming(innerSplitValueIt->second,
