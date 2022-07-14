@@ -778,6 +778,9 @@ void Symbolizer::populateMergeBlock(
         // using value that was created in the "split-off" block
         phiNode->addIncoming(innerSplitValueIt->second,
                              innerSplit.symbolizedBlock);
+        newMappingsFromOriginal.insert(
+            std::make_pair(innerSplitValueIt->second, phiNode));
+        symbolicMerges.insert(std::make_pair(symValue, phiNode));
       }
     }
 
@@ -852,6 +855,12 @@ void Symbolizer::populateMergeBlock(
         if (inst->getParent() == symbolizedBlock) {
           return false;
         }
+        for (auto innerSplit : splitData.internalSplits) {
+          if (inst->getParent() == innerSplit.symbolizedBlock ||
+              inst->getParent() == innerSplit.easyBlock)
+            return false;
+        }
+
         if (auto *phi = dyn_cast<PHINode>(inst)) {
           errs() << "phi replace in " << *inst << "\n";
           replaced.push_back(phi);

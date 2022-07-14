@@ -90,13 +90,14 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ValueMap<BasicBlock *, SplitData> splitData;
 
   for (auto basicBlock : allBasicBlocks) {
-    symbolizer.insertBasicBlockNotification(*basicBlock);
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
     if (anaDataIt->second.empty()) {
       symbolizer.insertBasicBlockNotification(*basicBlock);
     } else {
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
+
+      symbolizer.insertBasicBlockNotification(*blockSplitData.getCheckBlock());
       /*blockSplitData =
           symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);*/
       blockSplitData = symbolizer.splitAtLoads(blockSplitData);
