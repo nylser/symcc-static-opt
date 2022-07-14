@@ -274,6 +274,8 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
       CloneBasicBlock(symbolizedBlock, *VMap, ".easy", B.getParent());
   // updating inner references
   for (auto &inst : easyBlock->getInstList()) {
+    auto *loadInst = dyn_cast<LoadInst>(&inst);
+
     for (auto &operand : inst.operands()) {
       if (auto *value = operand.get(); value != nullptr) {
         if (auto mappedValue = VMap->find(value); mappedValue != VMap->end()) {
@@ -281,6 +283,8 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
         }
       }
     }
+    if (loadInst != nullptr)
+      visitLoadInst(*loadInst);
     if (auto *storeInst = dyn_cast<StoreInst>(&inst)) {
       storeInstructions.push_back(storeInst);
     }
@@ -298,111 +302,6 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
                                  storeInstructions.begin(),
                                  storeInstructions.end());
   return data;
-}
-
-SplitData Symbolizer::handleCalls(
-    SplitData &splitData,
-    std::map<llvm::Instruction *, std::list<const llvm::Value *>>
-        &afterCallDependencies) {
-  auto VMap = splitData.getVMap();
-  for (auto pair : *VMap) {
-    auto *instPtr = dyn_cast<Instruction>(pair->first);
-    if (instPtr == nullptr)
-      continue;
-    if (instPtr->getParent() != splitData.getSymbolizedBlock())
-      continue;
-
-    auto dependenciesEntry =
-        afterCallDependencies.find(const_cast<Instruction *>(instPtr));
-    // check if this instruction is contained in afterCallDependencies;
-    if (dependenciesEntry == afterCallDependencies.end())
-      continue;
-
-    // get reference to actual instruction in easyBlock
-    auto *easyBlockInstPtr = dyn_cast<Instruction>(pair->second);
-    // here we want to split the current block after the call
-    // instruction and clone until the end
-    auto *nextInstPtr =
-        const_cast<Instruction *>(easyBlockInstPtr->getNextNode());
-    // splitting nextInstPtr parent, because it might have already been
-    // split (reference to easy block doesn't work here, creates infinite
-    // loop)
-    errs() << "Splitting block: " << nextInstPtr->getParent()->getName()
-           << " at " << *nextInstPtr << "\n";
-    assert(nextInstPtr != nullptr);
-
-    auto split = splitAtInstruction(splitData, nextInstPtr, ".callSplit");
-
-    splitData.internalSplits.push_back(split);
-    splitData.modifiedEasyEndBlock = split.easyBlock;
-  }
-  return splitData;
-}
-
-SplitData Symbolizer::splitAtLoads(SplitData &splitData) {
-  SmallVector<LoadInst *, 0> loadInstructions;
-  // find all the instructions that need a split
-  for (auto &instruction : splitData.getEasyBlock()->getInstList()) {
-    auto *loadInstPtr = dyn_cast<LoadInst>(&instruction);
-    if (loadInstPtr == nullptr)
-      continue;
-    loadInstructions.push_back(loadInstPtr);
-  }
-
-  for (auto *loadInstPtr : loadInstructions) {
-    auto *splitPoint = loadInstPtr->getNextNode();
-    assert(splitPoint != nullptr && "Instruction after load is non existant");
-
-    // run symbolizer on load instruction, this should create the expression we
-    // need for the concreteness check
-    visitLoadInst(*loadInstPtr);
-
-    auto innerSplit = splitAtInstruction(splitData, splitPoint, ".loadSplit");
-
-    auto expression = symbolicExpressions[loadInstPtr];
-    auto terminator = loadInstPtr->getParent()->getTerminator();
-    assert(terminator != nullptr);
-    assert(expression != nullptr);
-    // concreteness check for symbolic load expression;
-    IRBuilder IRB(terminator);
-    auto nullExpr = ConstantPointerNull::get(IRB.getInt8PtrTy());
-    auto eqInst = IRB.CreateICmpEQ(expression, nullExpr);
-    ReplaceInstWithInst(terminator,
-                        BranchInst::Create(innerSplit.easyBlock,
-                                           innerSplit.symbolizedBlock, eqInst));
-
-    splitData.internalSplits.push_back(innerSplit);
-    splitData.modifiedEasyEndBlock = innerSplit.easyBlock;
-  }
-  return splitData;
-}
-
-InnerSplit Symbolizer::splitAtInstruction(SplitData &splitData,
-                                          Instruction *splitInstPtr,
-                                          std::string splitName) {
-  auto newEasyBlock =
-      SplitBlock(splitInstPtr->getParent(), splitInstPtr, nullptr, nullptr,
-                 nullptr, splitInstPtr->getParent()->getName() + splitName);
-  ValueToValueMapTy *VMap = new ValueToValueMapTy();
-  auto newSymBlock = CloneBasicBlock(newEasyBlock, *VMap, ".symbolized",
-                                     newEasyBlock->getParent());
-
-  // updating inner references
-  for (auto &inst : newSymBlock->getInstList()) {
-    for (auto &operand : inst.operands()) {
-      if (auto *value = operand.get(); value != nullptr) {
-        if (auto mappedValue = VMap->find(value); mappedValue != VMap->end()) {
-          inst.setOperand(operand.getOperandNo(), mappedValue->second);
-        }
-      }
-    }
-  }
-
-  newEasyBlock->setName(newEasyBlock->getName() + ".easy");
-  newSymBlock->moveBefore(newEasyBlock);
-
-  InnerSplit split(newEasyBlock, newSymBlock, VMap, splitInstPtr);
-  return split;
 }
 
 Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
@@ -496,7 +395,6 @@ void Symbolizer::insertBasicBlockCheck(
   for (auto dep : dependencies) {
     Value *nonConstDep = const_cast<Value *>(dep);
 
-    /// @todo Think about StoreInst and LoadInst!
     auto valueExpr = getSymbolicExpression(nonConstDep);
     if (valueExpr == nullptr) {
       // errs() << "no symExpression for " << *dep << " yet!\n";
@@ -509,7 +407,6 @@ void Symbolizer::insertBasicBlockCheck(
         finalExpr = it->second;
         errs() << "modifying from " << *valueExpr << " to " << *finalExpr
                << "\n";
-        continue;
       }
     }
     /**
@@ -582,12 +479,9 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
   auto symBlock = splitData.getSymbolizedBlock();
   auto easyBlock = splitData.getEasyBlock();
-  auto modifiedEasyEnd = splitData.modifiedEasyEndBlock;
 
   auto mergeBlock = splitData.getMergeBlock();
   auto easyTerminator = easyBlock->getTerminator();
-  if (modifiedEasyEnd != nullptr)
-    easyTerminator = modifiedEasyEnd->getTerminator();
 
   auto symTerminator = symBlock->getTerminator();
 
@@ -611,21 +505,6 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
       phiNode->addIncoming(
           getSymbolicExpressionOrNull(symRetInst->getReturnValue()), symBlock);
       ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
-
-      // do the above for all internalSplits
-      for (auto split : splitData.internalSplits) {
-        auto symRetInst =
-            dyn_cast<ReturnInst>(split.symbolizedBlock->getTerminator());
-        if (symRetInst == nullptr)
-          ;
-        continue;
-        auto setReturnExpr = dyn_cast<CallInst>(symRetInst->getPrevNode());
-        assert(setReturnExpr != nullptr);
-        phiNode->addIncoming(
-            getSymbolicExpressionOrNull(symRetInst->getReturnValue()),
-            symBlock);
-        ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
-      }
 
       IRB.CreateCall(runtime.setReturnExpression, phiNode);
       IRB.CreateRet(easyRetInst->getReturnValue());
@@ -725,11 +604,6 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
     ReplaceInstWithInst(symBlock->getTerminator(),
                         BranchInst::Create(mergeBlock));
 
-    // also replace terminator for every internally split symbolic block
-    for (auto split : splitData.internalSplits)
-      ReplaceInstWithInst(split.symbolizedBlock->getTerminator(),
-                          BranchInst::Create(mergeBlock));
-
     ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
 
     mergeBlock->getInstList().push_back(newTerminator);
@@ -743,8 +617,6 @@ void Symbolizer::populateMergeBlock(
   auto mergeBlock = splitData.getMergeBlock();
   auto symbolizedBlock = splitData.getSymbolizedBlock();
   auto easyBlock = splitData.getEasyBlock();
-  if (splitData.modifiedEasyEndBlock != nullptr)
-    easyBlock = splitData.modifiedEasyEndBlock;
 
   IRBuilder<> IRB(&*mergeBlock->getFirstInsertionPt());
 
@@ -765,6 +637,7 @@ void Symbolizer::populateMergeBlock(
     phiNode->addIncoming(symValue, symbolizedBlock);
     phiNode->addIncoming(easyValue, easyBlock);
 
+    /*
     // add values from internal split symbolized blocks
     for (auto innerSplit : splitData.internalSplits) {
       assert(value.second.pointsToAliveValue());
@@ -782,17 +655,12 @@ void Symbolizer::populateMergeBlock(
             std::make_pair(innerSplitValueIt->second, phiNode));
         symbolicMerges.insert(std::make_pair(symValue, phiNode));
       }
-    }
+    }*/
 
     newMappingsFromOriginal.insert(std::make_pair(symValue, phiNode));
     newMappingsFromClone.insert(std::make_pair(easyValue, phiNode));
     symbolicMerges.insert(std::make_pair(symValue, phiNode));
   }
-
-  // pre stage, holding on the iterator that will be inserted on the
-  // next "regular" instruction
-  std::optional<BasicBlock::iterator> preSplitIterator;
-  std::vector<BasicBlock::iterator> splitIterators;
 
   for (auto &inst : symbolizedBlock->getInstList()) {
     {
@@ -800,6 +668,7 @@ void Symbolizer::populateMergeBlock(
       if (easyMappedInstIt != VMap->end() ||
           &inst == symbolizedBlock->getTerminator() ||
           inst.getType() != IRB.getInt8PtrTy()) {
+        /*
         // if we have reached a splitPoint, add symbolic block instruction
         // iterator to splitIterators
         if (preSplitIterator.has_value()) {
@@ -809,7 +678,28 @@ void Symbolizer::populateMergeBlock(
         for (auto innerSplit : splitData.internalSplits) {
           if (easyMappedInstIt->second == innerSplit.splitPoint)
             preSplitIterator.emplace(innerSplit.symbolizedBlock->begin());
+        }*/
+        auto symExprIt = symbolicExpressions.find(&inst);
+        if (symExprIt != symbolicExpressions.end()) {
+          auto symExpr = symExprIt->second;
+          PHINode *phiNode = IRB.CreatePHI(symExpr->getType(), 2, "symmerge");
+
+          // symbolic computation value exists in the symbolizedBlock
+          phiNode->addIncoming(symExpr, symbolizedBlock);
+          symbolicMerges.insert(std::make_pair(symExpr, phiNode));
+          auto easySymExprIt =
+              symbolicExpressions.find(easyMappedInstIt->second);
+          if (easySymExprIt != symbolicExpressions.end()) {
+            // there is a symbolic expression that we can use
+            phiNode->addIncoming(easySymExprIt->second, easyBlock);
+            symbolicMerges.insert(
+                std::make_pair(easySymExprIt->second, phiNode));
+          } else {
+            // no symbolic computation value exists for this in the easyBlock
+            phiNode->addIncoming(nullExpression, easyBlock);
+          }
         }
+
         continue;
       }
     }
@@ -825,23 +715,6 @@ void Symbolizer::populateMergeBlock(
 
       inst.setOperand(operand.getOperandNo(), merge->second);
     }
-
-    PHINode *phiNode = IRB.CreatePHI(inst.getType(), 2, "symmerge");
-
-    // symbolic computation value exists in the symbolizedBlock
-    phiNode->addIncoming(&inst, symbolizedBlock);
-
-    // no symbolic computation value exists for this in the easyBlock
-    phiNode->addIncoming(nullExpression, easyBlock);
-
-    // handling block-internal splits:
-    // needs to map the computations of these
-    // symbolic blocks to the ones already created in the regular symbolic block
-    for (size_t i = 0; i < splitIterators.size(); i++) {
-      auto currentInstIt = splitIterators[i];
-      // phiNode->addIncoming(&*currentInstIt, currentInstIt->getParent());
-      splitIterators[i] = std::next(currentInstIt);
-    }
   }
 
   // replace uses of old values with new PHINodes
@@ -852,19 +725,23 @@ void Symbolizer::populateMergeBlock(
         return false;
       }
       if (auto inst = dyn_cast<Instruction>(U.getUser())) {
-        if (inst->getParent() == symbolizedBlock) {
+        if (inst->getParent() == symbolizedBlock ||
+            inst->getParent() == easyBlock)
           return false;
-        }
+
+        /*
         for (auto innerSplit : splitData.internalSplits) {
           if (inst->getParent() == innerSplit.symbolizedBlock ||
               inst->getParent() == innerSplit.easyBlock)
             return false;
-        }
+        }*/
 
         if (auto *phi = dyn_cast<PHINode>(inst)) {
           errs() << "phi replace in " << *inst << "\n";
           replaced.push_back(phi);
-        }
+        } else
+          errs() << "replace in " << *inst << "from: " << *value->first
+                 << "to: " << *value->second << "\n";
         return true;
       }
       return true;
@@ -1246,9 +1123,9 @@ void Symbolizer::visitStoreInst(StoreInst &I) {
 }
 
 void Symbolizer::visitGetElementPtrInst(GetElementPtrInst &I) {
-  // GEP performs address calculations but never actually accesses memory. In
-  // order to represent the result of a GEP symbolically, we start from the
-  // symbolic expression of the original pointer and duplicate its
+  // GEP performs address calculations but never actually accesses memory.
+  // In order to represent the result of a GEP symbolically, we start from
+  // the symbolic expression of the original pointer and duplicate its
   // computations at the symbolic level.
 
   // If everything is compile-time concrete, we don't need to emit code.
@@ -1300,8 +1177,8 @@ void Symbolizer::visitGetElementPtrInst(GetElementPtrInst &I) {
       }
 
       // TODO optimize? If the index is constant, we can perform the
-      // multiplication ourselves instead of having the solver do it. Also, if
-      // the element size is 1, we can omit the multiplication.
+      // multiplication ourselves instead of having the solver do it. Also,
+      // if the element size is 1, we can omit the multiplication.
 
       unsigned elementSize =
           dataLayout.getTypeAllocSize(type_it.getIndexedType());
@@ -1482,8 +1359,8 @@ void Symbolizer::visitCastInst(CastInst &I) {
 }
 
 void Symbolizer::visitPHINode(PHINode &I) {
-  // PHI nodes just assign values based on the origin of the last jump, so we
-  // assign the corresponding symbolic expression the same way.
+  // PHI nodes just assign values based on the origin of the last jump, so
+  // we assign the corresponding symbolic expression the same way.
 
   phiNodes.push_back(&I); // to be finalized later, see finalizePHINodes
 
@@ -1581,8 +1458,8 @@ CallInst *Symbolizer::createValueExpression(Value *V, IRBuilder<> &IRB) {
   if (valueType->isIntegerTy()) {
     auto bits = valueType->getPrimitiveSizeInBits();
     if (bits == 1) {
-      // Special case: LLVM uses the type i1 to represent Boolean values, but
-      // for Z3 we have to create expressions of a separate sort.
+      // Special case: LLVM uses the type i1 to represent Boolean values,
+      // but for Z3 we have to create expressions of a separate sort.
       return IRB.CreateCall(runtime.buildBool, {V});
     } else if (bits <= 64) {
       return IRB.CreateCall(runtime.buildInteger,
@@ -1591,8 +1468,8 @@ CallInst *Symbolizer::createValueExpression(Value *V, IRBuilder<> &IRB) {
     } else {
       // Anything up to the maximum supported 128 bits. Those integers are a
       // bit tricky because the symbolic backends don't support them per se.
-      // We have a special function in the run-time library that handles them,
-      // usually by assembling expressions from smaller chunks.
+      // We have a special function in the run-time library that handles
+      // them, usually by assembling expressions from smaller chunks.
       return IRB.CreateCall(
           runtime.buildInteger128,
           {IRB.CreateTrunc(IRB.CreateLShr(V, ConstantInt::get(valueType, 64)),
@@ -1617,13 +1494,13 @@ CallInst *Symbolizer::createValueExpression(Value *V, IRBuilder<> &IRB) {
     // In unoptimized code we may see structures in SSA registers. What we
     // want is a single bit-vector expression describing their contents, but
     // unfortunately we can't take the address of a register. We fix the
-    // problem with a hack: we write the register to memory and initialize the
-    // expression from there.
+    // problem with a hack: we write the register to memory and initialize
+    // the expression from there.
     //
     // An alternative would be to change the representation of structures in
     // SSA registers to "shadow structures" that contain one expression per
-    // member. However, this would put an additional burden on the handling of
-    // cast instructions, because expressions would have to be converted
+    // member. However, this would put an additional burden on the handling
+    // of cast instructions, because expressions would have to be converted
     // between different representations according to the type.
 
     auto *memory = IRB.CreateAlloca(V->getType());

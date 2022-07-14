@@ -47,21 +47,20 @@ public:
   SplitData(llvm::BasicBlock *checkBlock, llvm::BasicBlock *easyBlock,
             llvm::BasicBlock *symbolizedBlock, llvm::BasicBlock *mergeBlock,
             llvm::ValueToValueMapTy *VMap)
-      : modifiedEasyEndBlock(nullptr), m_checkBlock(checkBlock),
-        m_symbolizedBlock(symbolizedBlock), m_easyBlock(easyBlock),
-        m_mergeBlock(mergeBlock), m_VMap(VMap){};
+      : m_checkBlock(checkBlock), m_symbolizedBlock(symbolizedBlock),
+        m_easyBlock(easyBlock), m_mergeBlock(mergeBlock), m_VMap(VMap){};
 
   llvm::BasicBlock *getCheckBlock();
   llvm::BasicBlock *getEasyBlock();
   llvm::BasicBlock *getSymbolizedBlock();
   llvm::BasicBlock *getMergeBlock();
-  std::map<llvm::Instruction *, llvm::BasicBlock *> callSplitBlocks;
+  // std::map<llvm::Instruction *, llvm::BasicBlock *> callSplitBlocks;
   std::list<llvm::StoreInst *> storesToInstrument;
   llvm::ValueToValueMapTy *getVMap();
 
   /// if the easyBlock is subject block-internal splitting, we keep
   /// reference of the actual, final block of splitting here.
-  llvm::BasicBlock *modifiedEasyEndBlock;
+  // llvm::BasicBlock *modifiedEasyEndBlock;
 
   /// lists sym and easy blocks created in easyBlock due to block-internal
   /// splitting this should be in the order the splits appear in if there are
@@ -156,25 +155,6 @@ public:
   /// operations without symbolic data.
   void shortCircuitExpressionUses(SymbolicMerges &symbolicMerges,
                                   llvm::DominatorTree &DT);
-
-  ///
-  /// Handle block splitting at call instruction. This takes a map of terminator
-  /// references to keep track of the final terminator for later use in
-  /// `handleTerminators()`
-  ///
-  SplitData
-  handleCalls(SplitData &splitData,
-              std::map<llvm::Instruction *, std::list<const llvm::Value *>>
-                  &afterCallDependencies);
-
-  SplitData splitAtLoads(SplitData &splitData);
-  ///
-  /// Split an easy block at the given instruction, creating a new symbolic and
-  /// a new easy block.
-  ///
-  InnerSplit splitAtInstruction(SplitData &splitData,
-                                llvm::Instruction *splitInstPtr,
-                                std::string splitName);
 
   void insertBasicBlockCheck(SplitData &splitData,
                              std::list<const llvm::Value *> &dependencies,

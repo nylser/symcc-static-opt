@@ -71,21 +71,42 @@ bool SymbolizePass::runOnFunction(Function &F) {
   // DEBUG(errs() << "Symbolizing function ");
   // DEBUG(errs().write_escaped(functionName) << '\n');
 
+  AnalyzePass &pass = getAnalysis<AnalyzePass>();
+  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
+  assert(data != nullptr && "Analysis data is missing!");
+
   SmallVector<Instruction *, 0> allInstructions;
   SmallVector<BasicBlock *, 0> allBasicBlocks;
+  SmallSet<BasicBlock *, 8> loadSplitBlocks;
+
+  Symbolizer symbolizer(*F.getParent());
+
+  {
+    for (auto &I : instructions(F)) {
+      auto loadInstPtr = dyn_cast<LoadInst>(&I);
+      if (loadInstPtr == nullptr)
+        continue;
+      // split basic block after load
+      auto nextInstPtr = loadInstPtr->getNextNode();
+      assert(nextInstPtr != nullptr);
+
+      auto loadSplitBlock = SplitBlock(
+          loadInstPtr->getParent(), nextInstPtr, &DT, nullptr, nullptr,
+          loadInstPtr->getParent()->getName() + ".loadSplit");
+      auto depsList = &data->basicBlockData[loadSplitBlock];
+      depsList->push_back(loadInstPtr);
+      loadSplitBlocks.insert(loadSplitBlock);
+    }
+  }
+
   allBasicBlocks.reserve(F.getBasicBlockList().size());
   for (auto &B : F.getBasicBlockList()) {
     allBasicBlocks.push_back(&B);
   }
   allInstructions.reserve(F.getInstructionCount());
 
-  Symbolizer symbolizer(*F.getParent());
   symbolizer.symbolizeFunctionArguments(F);
-
-  AnalyzePass &pass = getAnalysis<AnalyzePass>();
-  DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  FunctionAnalysisData *data = pass.getFunctionAnalysisData(F);
-  assert(data != nullptr && "Analysis data is missing!");
 
   ValueMap<BasicBlock *, SplitData> splitData;
 
@@ -93,14 +114,12 @@ bool SymbolizePass::runOnFunction(Function &F) {
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
     if (anaDataIt->second.empty()) {
-      symbolizer.insertBasicBlockNotification(*basicBlock);
+      errs() << "no analysis data for: " << basicBlock->getName() << "\n";
     } else {
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
-
-      symbolizer.insertBasicBlockNotification(*blockSplitData.getCheckBlock());
       /*blockSplitData =
           symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);*/
-      blockSplitData = symbolizer.splitAtLoads(blockSplitData);
+      // blockSplitData = symbolizer.splitAtLoads(blockSplitData);
       splitData.insert(std::make_pair(basicBlock, blockSplitData));
     }
   }
@@ -115,10 +134,15 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     for (auto &I : blockSplitDataIt->second.getSymbolizedBlock()->getInstList())
       allInstructions.push_back(&I);
+
+    /*
     for (auto &internalSplit : blockSplitDataIt->second.internalSplits) {
       for (auto &I : internalSplit.symbolizedBlock->getInstList())
         allInstructions.push_back(&I);
-    }
+    }*/
+    // only insert for blocks which are "original"
+    if (loadSplitBlocks.find(B) == loadSplitBlocks.end())
+      symbolizer.insertBasicBlockNotification(*B);
   }
 
   for (auto *instPtr : allInstructions) {
