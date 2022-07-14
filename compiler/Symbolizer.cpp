@@ -637,26 +637,6 @@ void Symbolizer::populateMergeBlock(
     phiNode->addIncoming(symValue, symbolizedBlock);
     phiNode->addIncoming(easyValue, easyBlock);
 
-    /*
-    // add values from internal split symbolized blocks
-    for (auto innerSplit : splitData.internalSplits) {
-      assert(value.second.pointsToAliveValue());
-      Value *easyValue = const_cast<Value *>(&*value.second);
-      auto innerSplitValueIt = innerSplit.symbolizedVMap->find(easyValue);
-      if (innerSplitValueIt == innerSplit.symbolizedVMap->end()) {
-        // value must have been created before the split -> add already found
-        // symValue for incoming block;
-        phiNode->addIncoming(easyValue, innerSplit.symbolizedBlock);
-      } else {
-        // using value that was created in the "split-off" block
-        phiNode->addIncoming(innerSplitValueIt->second,
-                             innerSplit.symbolizedBlock);
-        newMappingsFromOriginal.insert(
-            std::make_pair(innerSplitValueIt->second, phiNode));
-        symbolicMerges.insert(std::make_pair(symValue, phiNode));
-      }
-    }*/
-
     newMappingsFromOriginal.insert(std::make_pair(symValue, phiNode));
     newMappingsFromClone.insert(std::make_pair(easyValue, phiNode));
     symbolicMerges.insert(std::make_pair(symValue, phiNode));
@@ -668,17 +648,7 @@ void Symbolizer::populateMergeBlock(
       if (easyMappedInstIt != VMap->end() ||
           &inst == symbolizedBlock->getTerminator() ||
           inst.getType() != IRB.getInt8PtrTy()) {
-        /*
-        // if we have reached a splitPoint, add symbolic block instruction
-        // iterator to splitIterators
-        if (preSplitIterator.has_value()) {
-          splitIterators.push_back(preSplitIterator.value());
-          preSplitIterator.reset();
-        }
-        for (auto innerSplit : splitData.internalSplits) {
-          if (easyMappedInstIt->second == innerSplit.splitPoint)
-            preSplitIterator.emplace(innerSplit.symbolizedBlock->begin());
-        }*/
+
         auto symExprIt = symbolicExpressions.find(&inst);
         if (symExprIt != symbolicExpressions.end()) {
           auto symExpr = symExprIt->second;
@@ -729,19 +699,9 @@ void Symbolizer::populateMergeBlock(
             inst->getParent() == easyBlock)
           return false;
 
-        /*
-        for (auto innerSplit : splitData.internalSplits) {
-          if (inst->getParent() == innerSplit.symbolizedBlock ||
-              inst->getParent() == innerSplit.easyBlock)
-            return false;
-        }*/
-
-        if (auto *phi = dyn_cast<PHINode>(inst)) {
-          errs() << "phi replace in " << *inst << "\n";
+        if (auto *phi = dyn_cast<PHINode>(inst))
           replaced.push_back(phi);
-        } else
-          errs() << "replace in " << *inst << "from: " << *value->first
-                 << "to: " << *value->second << "\n";
+
         return true;
       }
       return true;
