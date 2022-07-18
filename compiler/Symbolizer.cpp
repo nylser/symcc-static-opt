@@ -491,25 +491,18 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
     /// expressions in any case
     auto symRetInst = dyn_cast<ReturnInst>(symTerminator);
     assert(symRetInst != nullptr);
-    IRBuilder<> IRB(mergeBlock);
+    IRBuilder<> IRB(easyBlock->getTerminator());
     if (symRetInst->getReturnValue() != nullptr) {
       auto nullExpr = ConstantPointerNull::get(IRB.getInt8PtrTy());
-      auto phiNode = IRB.CreatePHI(nullExpr->getType(), 2);
 
-      // when coming from easy block return null expression!
-      phiNode->addIncoming(nullExpr, easyBlock);
-
-      // add returnExpression call
-      auto setReturnExpr = dyn_cast<CallInst>(symRetInst->getPrevNode());
-      assert(setReturnExpr != nullptr);
-      phiNode->addIncoming(
-          getSymbolicExpressionOrNull(symRetInst->getReturnValue()), symBlock);
       ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
 
-      IRB.CreateCall(runtime.setReturnExpression, phiNode);
+      IRB.CreateCall(runtime.setReturnExpression, nullExpr);
+      IRB.SetInsertPoint(mergeBlock);
       IRB.CreateRet(easyRetInst->getReturnValue());
       ReplaceInstWithInst(easyRetInst, BranchInst::Create(mergeBlock));
     } else {
+      IRB.SetInsertPoint(mergeBlock);
       IRB.CreateRet(symRetInst->getReturnValue());
     }
 
