@@ -401,14 +401,20 @@ void Symbolizer::insertBasicBlockCheck(
       continue;
     }
     auto finalExpr = valueExpr;
-    if (auto *instPtr = dyn_cast<Instruction>(valueExpr)) {
-      auto it = symbolicMerges.find(instPtr);
-      if (it != symbolicMerges.end()) {
-        finalExpr = it->second;
-        errs() << "modifying from " << *valueExpr << " to " << *finalExpr
-               << "\n";
-      }
+    auto *exprInstPtr = dyn_cast<Instruction>(valueExpr);
+    if (exprInstPtr == nullptr) {
+      valueExprList.push_back(finalExpr);
+      continue;
     }
+
+    // checking if our expression was subject to a merge before
+    auto it = symbolicMerges.find(exprInstPtr);
+    if (it != symbolicMerges.end()) {
+      finalExpr = it->second;
+      exprInstPtr = it->second;
+      errs() << "modifying from " << *valueExpr << " to " << *finalExpr << "\n";
+    }
+
     /**
      * According to Fabian this block should not be necessary! Actually, given
      * correct analysis, every analyzed dependency should be dominant and
@@ -416,27 +422,26 @@ void Symbolizer::insertBasicBlockCheck(
      * There might be one exception. If a loop introduces new values that might
      * be symbolic, those might not be defined from the start?
      */
-    if (auto inst = dyn_cast<Instruction>(finalExpr)) {
-      if (B != inst->getParent() && !DT.dominates(inst, B)) {
-        errs() << "no domination!" << *finalExpr
-               << " to block: " << B->getName() << "\n";
-        errs() << *inst->getParent() << "\n";
-        auto phiNode = PHINode::Create(inst->getType(), pred_size(B));
-        for (auto predBlock : predecessors(B)) {
-          if (DT.dominates(inst, predBlock)) {
-            phiNode->addIncoming(inst, predBlock);
-          } else {
-            phiNode->addIncoming(
-                ConstantPointerNull::get(cast<PointerType>(inst->getType())),
-                predBlock);
-          }
+    if (B != exprInstPtr->getParent() && !DT.dominates(exprInstPtr, B)) {
+      errs() << "no domination!" << *finalExpr << " to block: " << B->getName()
+             << "\n";
+      // errs() << *exprInstPtr->getParent() << "\n";
+      auto phiNode = PHINode::Create(exprInstPtr->getType(), pred_size(B));
+      for (auto predBlock : predecessors(B)) {
+        if (exprInstPtr->getParent() == predBlock ||
+            DT.dominates(exprInstPtr, predBlock)) {
+          phiNode->addIncoming(exprInstPtr, predBlock);
+        } else {
+          phiNode->addIncoming(ConstantPointerNull::get(
+                                   cast<PointerType>(exprInstPtr->getType())),
+                               predBlock);
         }
-        B->getInstList().push_front(phiNode);
-        finalExpr = phiNode;
-        // finalExpr = traverseDownFromInstruction(B, inst, DT);
-        // errs() << "built new expression: " << *finalExpr << "\n";
       }
+      B->getInstList().push_front(phiNode);
+      finalExpr = phiNode;
     }
+
+    // add finalExpr to list of values to check;
     valueExprList.push_back(finalExpr);
   }
   std::set<Value *> valueExprSet;
@@ -618,7 +623,7 @@ void Symbolizer::populateMergeBlock(
   ValueMap<Value *, PHINode *> newMappingsFromOriginal;
   ValueMap<Value *, PHINode *> newMappingsFromClone;
 
-  // create PHINodes for all mappings in the node
+  // merge all regular computation values back together.
   for (auto value : *VMap) {
     if (value->first->getType()->isVoidTy()) {
       continue;
@@ -635,6 +640,7 @@ void Symbolizer::populateMergeBlock(
     symbolicMerges.insert(std::make_pair(symValue, phiNode));
   }
 
+  // merge symbolic "output" values to be used further
   for (auto &inst : symbolizedBlock->getInstList()) {
     {
       auto easyMappedInstIt = VMap->find(&inst);
@@ -661,6 +667,7 @@ void Symbolizer::populateMergeBlock(
             // no symbolic computation value exists for this in the easyBlock
             phiNode->addIncoming(nullExpression, easyBlock);
           }
+          newMappingsFromOriginal.insert(std::make_pair(symExpr, phiNode));
         }
 
         continue;
@@ -671,7 +678,7 @@ void Symbolizer::populateMergeBlock(
     // values
     for (auto &operand : inst.operands()) {
       auto merge = symbolicMerges.find(operand.get());
-      // don't replace operands that are merged in the current mergeBlock
+      // don't replace operands with merges created in the current mergeBlock
       if (merge == symbolicMerges.end() ||
           merge->second->getParent() == mergeBlock)
         continue;
