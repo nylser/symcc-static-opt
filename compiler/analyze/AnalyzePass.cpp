@@ -67,27 +67,12 @@ bool AnalyzePass::runOnModule(Module &M) {
         errs() << B.getName() << " loop: " << *loop << "\n";
       }
       SmallSet<Value *, 8> basicBlockDeps;
-      ValueMap<CallInst *, SmallSet<Value *, 8>> callInstDeps;
-      CallInst *lastCall = nullptr;
 
-      // errs() << B.getName() << "\n";
       for (Instruction &I : B) {
 
         if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
-          basicBlockDeps.insert(&I);
-          // collect dependencies after call
-          if (lastCall != nullptr) {
-            errs() << "have last call " << *lastCall << "\n";
-            auto callInstDepList = &callInstDeps[lastCall];
-            callInstDepList->insert(&I);
-          }
+          // load instructions are split in Symbolizer
           continue;
-        }
-
-        // TODO: Memory might have been changed after call inst and no longer be
-        // known-concrete
-        if (auto *callInst = dyn_cast<CallInst>(&I)) {
-          lastCall = callInst;
         }
 
         if (auto *storeInst = dyn_cast<StoreInst>(&I)) {
@@ -110,34 +95,15 @@ bool AnalyzePass::runOnModule(Module &M) {
         auto topLevel = traversePredecessors(B, Dep);
         valueDependencies.insert(std::make_pair(Dep, topLevel));
         basicBlockTopLevelDeps.insert(topLevel.begin(), topLevel.end());
-        // errs() << *Dep << "\n";
-      }
-
-      // Might be optimizable. But caching of the preds-list should already help
-      for (auto callInstPair : callInstDeps) {
-        llvm::SmallSet<const Value *, 8> callInstTopLevelDeps;
-        for (Value *Dep : callInstPair->second) {
-          auto topLevel = traversePredecessors(B, Dep);
-          valueDependencies.insert(std::make_pair(Dep, topLevel));
-          callInstTopLevelDeps.insert(topLevel.begin(), topLevel.end());
-        }
-        std::list<const Value *> *callInstDepsList =
-            &data->afterCallDependencies[callInstPair->first];
-        for (auto *topLevelDep : callInstTopLevelDeps) {
-          callInstDepsList->push_back(topLevelDep);
-        }
-        // errs() << *Dep << "\n";
       }
 
       std::list<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
 
       for (auto *topLevelDep : basicBlockTopLevelDeps) {
         topLevelDepsList->push_back(topLevelDep);
-        errs() << "Dep: " << *topLevelDep << "\n";
+        // errs() << "Dep: " << *topLevelDep << "\n";
       }
     }
-
-    // errs() << "EndOfFunction\n\n";
   }
 
   // clean up memory
