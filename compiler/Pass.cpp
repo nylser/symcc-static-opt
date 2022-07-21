@@ -117,9 +117,6 @@ bool SymbolizePass::runOnFunction(Function &F) {
       errs() << "no analysis data for: " << basicBlock->getName() << "\n";
     } else {
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
-      /*blockSplitData =
-          symbolizer.handleCalls(blockSplitData, data->afterCallDependencies);*/
-      // blockSplitData = symbolizer.splitAtLoads(blockSplitData);
       splitData.insert(std::make_pair(basicBlock, blockSplitData));
     }
   }
@@ -135,11 +132,6 @@ bool SymbolizePass::runOnFunction(Function &F) {
     for (auto &I : blockSplitDataIt->second.getSymbolizedBlock()->getInstList())
       allInstructions.push_back(&I);
 
-    /*
-    for (auto &internalSplit : blockSplitDataIt->second.internalSplits) {
-      for (auto &I : internalSplit.symbolizedBlock->getInstList())
-        allInstructions.push_back(&I);
-    }*/
     // only insert for blocks which are "original"
     if (loadSplitBlocks.find(B) == loadSplitBlocks.end())
       symbolizer.insertBasicBlockNotification(*B);
@@ -212,10 +204,11 @@ bool SymbolizePass::runOnFunction(Function &F) {
   // auto str = builder.CreateGlobalStringPtr("easy execution\n");
 
   /** Primarily removing some generated PHINodes:
-   *  If the incoming value does not dominate the corresponding incoming block,
-   * it's also technically impossible this value would need to be used in
-   * following blocks. This also eliminates domination errors caused by some
-   * generated symbolic merges*/
+   *  If the incoming value does not dominate the corresponding incoming
+   * block, it's also technically impossible this value would need to be used
+   * in following blocks. This also eliminates domination errors caused by
+   * some generated symbolic merges
+   **/
   std::set<PHINode *> toRemove;
   for (auto pair : splitData) {
     auto blockSplitData = pair->second;
