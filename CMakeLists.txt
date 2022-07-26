@@ -138,7 +138,8 @@ add_library(Symbolize MODULE
   compiler/Pass.cpp
   compiler/Runtime.cpp
   compiler/Main.cpp
-  compiler/analyze/AnalyzePass.cpp)
+  compiler/analyze/AnalyzePass.cpp
+  compiler/split/SplitPass.cpp)
 target_link_libraries(Symbolize ${SVF_LIB} ${LLVMCudd})
 target_link_libraries(Symbolize ${Z3_LIBRARIES})
 

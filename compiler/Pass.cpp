@@ -78,27 +78,8 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
   SmallVector<Instruction *, 0> allInstructions;
   SmallVector<BasicBlock *, 0> allBasicBlocks;
-  SmallSet<BasicBlock *, 8> loadSplitBlocks;
 
   Symbolizer symbolizer(*F.getParent());
-
-  {
-    for (auto &I : instructions(F)) {
-      auto loadInstPtr = dyn_cast<LoadInst>(&I);
-      if (loadInstPtr == nullptr)
-        continue;
-      // split basic block after load
-      auto nextInstPtr = loadInstPtr->getNextNode();
-      assert(nextInstPtr != nullptr);
-
-      auto loadSplitBlock = SplitBlock(
-          loadInstPtr->getParent(), nextInstPtr, &DT, nullptr, nullptr,
-          loadInstPtr->getParent()->getName() + ".loadSplit");
-      auto depsList = &data->basicBlockData[loadSplitBlock];
-      depsList->push_back(loadInstPtr);
-      loadSplitBlocks.insert(loadSplitBlock);
-    }
-  }
 
   allBasicBlocks.reserve(F.getBasicBlockList().size());
   for (auto &B : F.getBasicBlockList()) {
@@ -131,10 +112,6 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     for (auto &I : blockSplitDataIt->second.getSymbolizedBlock()->getInstList())
       allInstructions.push_back(&I);
-
-    // only insert for blocks which are "original"
-    if (loadSplitBlocks.find(B) == loadSplitBlocks.end())
-      symbolizer.insertBasicBlockNotification(*B);
   }
 
   for (auto *instPtr : allInstructions) {

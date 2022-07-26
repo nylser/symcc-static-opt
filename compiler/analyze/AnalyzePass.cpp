@@ -1,5 +1,6 @@
 #include "AnalyzePass.h"
 
+#include "../split/SplitPass.h"
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/User.h>
 #include <llvm/Support/raw_ostream.h>
@@ -68,10 +69,23 @@ bool AnalyzePass::runOnModule(Module &M) {
       }
       SmallSet<Value *, 8> basicBlockDeps;
 
+      std::list<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
+
       for (Instruction &I : B) {
 
         if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
           // load instructions are split in Symbolizer
+          auto nextInst = loadInst->getNextNode();
+          auto brInst = dyn_cast<BranchInst>(nextInst);
+          // check that load splitting actually occured.
+          assert(brInst != nullptr && brInst->isUnconditional() &&
+                 "after each load instruction, there should be an "
+                 "unconditional branch instruction (load splitting)");
+
+          // add this load instruction to the concreteness dependencies for the
+          // next block, so that we can perform the concreteness check after
+          // load splitting
+          data->basicBlockData[brInst->getSuccessor(0)].push_back(loadInst);
           continue;
         }
 
@@ -96,8 +110,6 @@ bool AnalyzePass::runOnModule(Module &M) {
         valueDependencies.insert(std::make_pair(Dep, topLevel));
         basicBlockTopLevelDeps.insert(topLevel.begin(), topLevel.end());
       }
-
-      std::list<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
 
       for (auto *topLevelDep : basicBlockTopLevelDeps) {
         topLevelDepsList->push_back(topLevelDep);
@@ -223,6 +235,7 @@ const SVF::PAGNode *getLHSTopLevPtr(const VFGNode *node) {
 
 void AnalyzePass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
+  AU.addRequired<SplitPass>();
   AU.addRequired<LoopInfoWrapperPass>();
 }
 

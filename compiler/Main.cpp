@@ -17,16 +17,18 @@
 
 #include "Pass.h"
 #include "analyze/AnalyzePass.h"
+#include "split/SplitPass.h"
 
 void addSymbolizePass(const llvm::PassManagerBuilder & /* unused */,
-                      llvm::legacy::PassManagerBase &PM)
-{
-    PM.add(new AnalyzePass());
-    PM.add(new SymbolizePass());
+                      llvm::legacy::PassManagerBase &PM) {
+  PM.add(new SplitPass());
+  PM.add(new AnalyzePass());
+  PM.add(new SymbolizePass());
 }
 
 // Make the passes known to opt.
 static llvm::RegisterPass<SymbolizePass> X("symbolize", "Symbolization Pass");
+static llvm::RegisterPass<SplitPass> X2("split", "Split Pass");
 static llvm::RegisterPass<AnalyzePass> X1("analyze", "Analyze Pass");
 // Tell frontends to run the pass automatically.
 static struct llvm::RegisterStandardPasses
