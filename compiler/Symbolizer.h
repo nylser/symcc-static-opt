@@ -163,6 +163,10 @@ public:
   SplitData splitIntoBlocks(llvm::BasicBlock &B);
   void finalizeTerminators(SplitData &splitData);
   void populateMergeBlock(SplitData &splitData, SymbolicMerges &symbolicMerges);
+
+  /// Clean up previously created PHI nodes in successors
+  ///
+  /// TODO: More precise description
   void cleanUpSuccessorPHINodes(SplitData &splitData,
                                 SymbolicMerges &symbolicMerges);
   void insertDebugPrint(llvm::BasicBlock *B, llvm::Constant *str,

@@ -740,13 +740,19 @@ void Symbolizer::cleanUpSuccessorPHINodes(SplitData &splitData,
   auto easyBlock = splitData.getEasyBlock();
   for (auto succBlock : successors(mergeBlock)) {
     for (auto &phi : succBlock->phis()) {
-      phi.replaceIncomingBlockWith(symBlock, mergeBlock);
+
+      // TODO: if there are references to the easy block, remove them?
       // remove previously inserted references to the easy block.
       auto idx = phi.getBasicBlockIndex(easyBlock);
       if (idx >= 0) {
         phi.removeIncomingValue(idx);
       }
-      // fix references from symBlock to mergeBlock (symbolicMerges)
+
+      // if phi has the symbolic block as predecessor, 
+      // fix up to be the actual predecessor, the merge block
+      phi.replaceIncomingBlockWith(symBlock, mergeBlock);
+
+      // if phi node 
       for (auto &incoming : phi.incoming_values()) {
         auto it = symbolicMerges.find(incoming.get());
         if (it == symbolicMerges.end())

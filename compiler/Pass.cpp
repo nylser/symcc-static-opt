@@ -92,16 +92,21 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ValueMap<BasicBlock *, SplitData> splitData;
 
   for (auto basicBlock : allBasicBlocks) {
+    symbolizer.insertBasicBlockNotification(*basicBlock);
+
+    // get analysis data for this basic block.
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
     if (anaDataIt->second.empty()) {
       errs() << "no analysis data for: " << basicBlock->getName() << "\n";
     } else {
+      // split into check, symbolic and concrete, as well as merge blocks
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
       splitData.insert(std::make_pair(basicBlock, blockSplitData));
     }
   }
 
+  // create a list of all instructions to be symbolized
   for (auto &B : allBasicBlocks) {
     auto blockSplitDataIt = splitData.find(B);
     if (blockSplitDataIt == splitData.end()) {
