@@ -97,6 +97,9 @@ bool SymbolizePass::runOnFunction(Function &F) {
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
 
+    if (anaDataIt->second.empty())
+      continue;
+
     // split into check, symbolic and concrete, as well as merge blocks
     auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
     splitData.insert(std::make_pair(basicBlock, blockSplitData));
@@ -104,13 +107,13 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
   // create a list of all instructions to be symbolized
   for (auto &B : allBasicBlocks) {
-    symbolizer.insertBasicBlockNotification(*B);
     auto blockSplitDataIt = splitData.find(B);
     if (blockSplitDataIt == splitData.end()) {
       for (auto &I : B->getInstList())
         allInstructions.push_back(&I);
       continue;
     }
+    symbolizer.insertBasicBlockNotification(*B);
 
     for (auto &I : blockSplitDataIt->second.getSymbolizedBlock()->getInstList())
       allInstructions.push_back(&I);
@@ -131,8 +134,8 @@ bool SymbolizePass::runOnFunction(Function &F) {
     assert(dependenciesIt != data->basicBlockData.end() &&
            "Dependencies for block are non-existant");
 
-    // if (dependenciesIt->second.empty())
-    //   continue;
+    if (dependenciesIt->second.empty())
+      continue;
 
     auto blockSplitDataIt = splitData.find(currentBlock);
 
@@ -155,6 +158,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     symbolizer.cleanUpSuccessorPHINodes(blockSplitData, symbolicMerges);
 
+    /*
     // if there are internal splits, don't remove any blocks?
     if (blockSplitData.internalSplits.size() > 0)
       continue;
@@ -164,7 +168,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     // if merge block doesnt have any predecessors, we can remove it
     if (blockSplitData.getMergeBlock()->hasNPredecessors(0)) {
       blockSplitData.getMergeBlock()->removeFromParent();
-    }
+    }*/
   }
   DT.recalculate(F);
   ///  TODO: do we still need this? Answer: right now, we do. It creates value
@@ -226,7 +230,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
   verifyFunction(F, &errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
-  errs() << "------------" << F.getName() << "------------\n";
+  // errs() << "------------" << F.getName() << "------------\n";
   return true;
 }
 

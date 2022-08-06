@@ -400,7 +400,7 @@ void Symbolizer::insertBasicBlockCheck(
   } else {
     // no dependencies means we don't have to executed the instrumented version,
     // just branch to the easy block
-    BranchInst *branchInst = BranchInst::Create(easyBlock);
+    BranchInst *branchInst = BranchInst::Create(symbolizedBlock);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   }
 }
@@ -441,9 +441,45 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
     /// branch instructions are simple: copy this branch instruction to the end
     /// of mergeBlock and modify symBlock and easyBlock to branch to mergeBlock
 
-    // } else if (auto switchInst = dyn_cast<SwitchInst>(easyTerminator)) {
-    /// switch should be equivalent in handling to branch instruction
+  } else if (auto switchInst = dyn_cast<SwitchInst>(easyTerminator)) {
+    /// symCC has special handling for the switch instruction:
+    /// it splits off the switch instruction to a different block (switch block)
+    /// then, it checks whether the condition is symbolic at runtime:
+    /// if yes: push path constraints for every case, then execute switch block.
+    /// if no: directly execute switch block.
+    /// this means for us: find the branches to the switch block, and replace it
+    /// with the merge block.
+    auto brInst = dyn_cast<BranchInst>(symTerminator);
+    assert(brInst != nullptr && "branch instruction expected here");
+    assert(brInst->getNumSuccessors() == 2 &&
+           "branch inst to switch should have exactly two successors");
+    auto constraintBlock = brInst->getSuccessor(0);
+    auto switchBlock = brInst->getSuccessor(1);
+    assert(constraintBlock->getSingleSuccessor() == switchBlock &&
+           "constraint block should always branch to switch block");
 
+    // replace the switch block successor
+    brInst->replaceSuccessorWith(switchBlock, mergeBlock);
+
+    // clone the switch instruction into the merge block;
+    auto newTerminator = easyTerminator->clone();
+    ReplaceInstWithInst(constraintBlock->getTerminator(),
+                        BranchInst::Create(mergeBlock));
+
+    // in easy block, just replace the switch instruction with a branch to merge
+    // block
+
+    ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
+    mergeBlock->getInstList().push_back(newTerminator);
+
+    // switchBlock->replaceSuccessorsPhiUsesWith(mergeBlock);
+    // remove the switch block, so that the predecessors get cleaned up
+    // DeleteDeadBlock(switchBlock);
+    for (auto successor : successors(switchBlock)) {
+      successor->replacePhiUsesWith(switchBlock, mergeBlock);
+    }
+    switchBlock->removeFromParent();
+    switchBlock->dropAllReferences();
     // } else if (auto indirectBrInst =
     // dyn_cast<IndirectBrInst>(easyTerminator))
     //{
@@ -541,6 +577,14 @@ void Symbolizer::populateMergeBlock(
   auto mergeBlock = splitData.getMergeBlock();
   auto symbolizedBlock = splitData.getSymbolizedBlock();
   auto easyBlock = splitData.getEasyBlock();
+  BasicBlock *constraintBlock = nullptr;
+  if (dyn_cast<SwitchInst>(mergeBlock->getTerminator())) {
+    auto brInst = dyn_cast<BranchInst>(symbolizedBlock->getTerminator());
+    auto maybeConstraintBlock = brInst->getSuccessor(0);
+    assert(maybeConstraintBlock != nullptr &&
+           "constraint block should exist with switch instruction");
+    constraintBlock = maybeConstraintBlock;
+  }
 
   IRBuilder<> IRB(&*mergeBlock->getFirstInsertionPt());
 
@@ -559,6 +603,10 @@ void Symbolizer::populateMergeBlock(
     PHINode *phiNode =
         IRB.CreatePHI(symValue->getType(), 2, symValue->getName() + ".merge");
     phiNode->addIncoming(symValue, symbolizedBlock);
+    // if there is a constraint block, because the terminator is a switch
+    // instruction, add it to the incoming blocks
+    if (constraintBlock != nullptr)
+      phiNode->addIncoming(symValue, constraintBlock);
     phiNode->addIncoming(easyValue, easyBlock);
 
     newMappingsFromOriginal.insert(std::make_pair(symValue, phiNode));
@@ -587,11 +635,17 @@ void Symbolizer::populateMergeBlock(
           }
 
           PHINode *phiNode = IRB.CreatePHI(symExpr->getType(), 2, "symmerge");
-          errs() << phiNode->getName() << " created. for inst " << inst
-                 << " and " << *symExpr << "\n";
+          // errs() << phiNode->getName() << " created. for inst " << inst
+          //       << " and " << *symExpr << "\n";
 
           // symbolic computation value exists in the symbolizedBlock
           phiNode->addIncoming(symExpr, symbolizedBlock);
+
+          // if there is a constraint block, because the terminator is a switch
+          // instruction, add it to the incoming blocks
+          if (constraintBlock != nullptr)
+            phiNode->addIncoming(symExpr, constraintBlock);
+
           symbolicMerges.insert(std::make_pair(symExpr, phiNode));
           auto easySymExprIt =
               symbolicExpressions.find(easyMappedInstIt->second);
