@@ -577,7 +577,18 @@ void Symbolizer::populateMergeBlock(
         auto symExprIt = symbolicExpressions.find(&inst);
         if (symExprIt != symbolicExpressions.end()) {
           auto symExpr = symExprIt->second;
+          auto symExprInst = dyn_cast<Instruction>(symExpr);
+
+          // if this expression was not created in the symbolizedBlock, do not
+          // merge.
+          if (symExprInst != nullptr &&
+              symExprInst->getParent() != symbolizedBlock) {
+            continue;
+          }
+
           PHINode *phiNode = IRB.CreatePHI(symExpr->getType(), 2, "symmerge");
+          errs() << phiNode->getName() << " created. for inst " << inst
+                 << " and " << *symExpr << "\n";
 
           // symbolic computation value exists in the symbolizedBlock
           phiNode->addIncoming(symExpr, symbolizedBlock);
