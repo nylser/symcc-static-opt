@@ -220,13 +220,19 @@ void Symbolizer::shortCircuitExpressionUses(SymbolicMerges &symbolicMerges,
 
       Value *finalArgExpression;
       if (needRuntimeCheck) {
-        IRB.SetInsertPoint(symbolicComputation.firstInstruction);
-        auto *argPHI = IRB.CreatePHI(IRB.getInt8PtrTy(), 2);
-        argPHI->addIncoming(originalArgExpression, argCheckBlock);
-        argPHI->addIncoming(newArgExpression, newArgExpression->getParent());
-        finalArgExpression = argPHI;
-      } else {
+        if (newArgExpression == nullptr) {
+          finalArgExpression = originalArgExpression;
+        } else {
+          IRB.SetInsertPoint(symbolicComputation.firstInstruction);
+          auto *argPHI = IRB.CreatePHI(IRB.getInt8PtrTy(), 2);
+          argPHI->addIncoming(originalArgExpression, argCheckBlock);
+          argPHI->addIncoming(newArgExpression, newArgExpression->getParent());
+          finalArgExpression = argPHI;
+        }
+      } else if (newArgExpression != nullptr) {
         finalArgExpression = newArgExpression;
+      } else {
+        finalArgExpression = originalArgExpression;
       }
 
       argument.replaceOperand(finalArgExpression);
@@ -432,6 +438,8 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
       IRB.CreateRet(easyRetInst->getReturnValue());
       ReplaceInstWithInst(easyRetInst, BranchInst::Create(mergeBlock));
     } else {
+      ReplaceInstWithInst(symRetInst, BranchInst::Create(mergeBlock));
+      ReplaceInstWithInst(easyRetInst, BranchInst::Create(mergeBlock));
       IRB.SetInsertPoint(mergeBlock);
       IRB.CreateRet(symRetInst->getReturnValue());
     }
@@ -443,14 +451,34 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
   } else if (auto switchInst = dyn_cast<SwitchInst>(easyTerminator)) {
     /// symCC has special handling for the switch instruction:
+
+    /// if the condition expression is constantly null, then do nothing
+    /// else:
     /// it splits off the switch instruction to a different block (switch block)
     /// then, it checks whether the condition is symbolic at runtime:
     /// if yes: push path constraints for every case, then execute switch block.
     /// if no: directly execute switch block.
     /// this means for us: find the branches to the switch block, and replace it
     /// with the merge block.
+
     auto brInst = dyn_cast<BranchInst>(symTerminator);
-    assert(brInst != nullptr && "branch instruction expected here");
+    if (brInst == nullptr) {
+      auto symSwitchInst = dyn_cast<SwitchInst>(symTerminator);
+      assert(symSwitchInst != nullptr &&
+             "branch or switch instruction expected here");
+      // symCC performed no split, constant null condition.
+      // clone the switch instruction into the merge block;
+      ReplaceInstWithInst(symTerminator, BranchInst::Create(mergeBlock));
+      symBlock->replaceSuccessorsPhiUsesWith(mergeBlock);
+      // in easy block, just replace the switch instruction with a branch to
+      // merge block
+      auto newTerminator = easyTerminator->clone();
+      ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
+      mergeBlock->getInstList().push_back(newTerminator);
+      return;
+    }
+
+    /// symCC performed a split
     assert(brInst->getNumSuccessors() == 2 &&
            "branch inst to switch should have exactly two successors");
     auto constraintBlock = brInst->getSuccessor(0);
@@ -468,16 +496,13 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
     // in easy block, just replace the switch instruction with a branch to merge
     // block
-
     ReplaceInstWithInst(easyTerminator, BranchInst::Create(mergeBlock));
     mergeBlock->getInstList().push_back(newTerminator);
 
     // switchBlock->replaceSuccessorsPhiUsesWith(mergeBlock);
     // remove the switch block, so that the predecessors get cleaned up
     // DeleteDeadBlock(switchBlock);
-    for (auto successor : successors(switchBlock)) {
-      successor->replacePhiUsesWith(switchBlock, mergeBlock);
-    }
+    switchBlock->replaceSuccessorsPhiUsesWith(mergeBlock);
     switchBlock->removeFromParent();
     switchBlock->dropAllReferences();
     // } else if (auto indirectBrInst =
@@ -580,10 +605,23 @@ void Symbolizer::populateMergeBlock(
   BasicBlock *constraintBlock = nullptr;
   if (dyn_cast<SwitchInst>(mergeBlock->getTerminator())) {
     auto brInst = dyn_cast<BranchInst>(symbolizedBlock->getTerminator());
-    auto maybeConstraintBlock = brInst->getSuccessor(0);
-    assert(maybeConstraintBlock != nullptr &&
-           "constraint block should exist with switch instruction");
-    constraintBlock = maybeConstraintBlock;
+    if (brInst->getNumSuccessors() == 2) {
+      auto maybeConstraintBlock = brInst->getSuccessor(0);
+
+      /// this doesnt always have to be the case for switchInsts, see
+      /// finalizeTerminators()
+      /// this is why we need to check, that the branch instruction doesn't go
+      /// to mergeBlock
+      if (maybeConstraintBlock != nullptr && maybeConstraintBlock != mergeBlock)
+        constraintBlock = maybeConstraintBlock;
+    }
+    // assert(maybeConstraintBlock != nullptr &&
+    //        "constraint block should exist with switch instruction");
+  }
+
+  BasicBlock *invokeBranchBlock = nullptr;
+  if (auto symInvoke = dyn_cast<InvokeInst>(symbolizedBlock->getTerminator())) {
+    invokeBranchBlock = symInvoke->getNormalDest();
   }
 
   IRBuilder<> IRB(&*mergeBlock->getFirstInsertionPt());
@@ -602,7 +640,14 @@ void Symbolizer::populateMergeBlock(
     auto easyValue = value.second;
     PHINode *phiNode =
         IRB.CreatePHI(symValue->getType(), 2, symValue->getName() + ".merge");
-    phiNode->addIncoming(symValue, symbolizedBlock);
+
+    // if there is an invoke instruction as terminator, we have to use the
+    // split-off block as predecessor.
+    if (invokeBranchBlock != nullptr) {
+      phiNode->addIncoming(symValue, invokeBranchBlock);
+    } else {
+      phiNode->addIncoming(symValue, symbolizedBlock);
+    }
     // if there is a constraint block, because the terminator is a switch
     // instruction, add it to the incoming blocks
     if (constraintBlock != nullptr)
@@ -638,9 +683,13 @@ void Symbolizer::populateMergeBlock(
           // errs() << phiNode->getName() << " created. for inst " << inst
           //       << " and " << *symExpr << "\n";
 
-          // symbolic computation value exists in the symbolizedBlock
-          phiNode->addIncoming(symExpr, symbolizedBlock);
-
+          // if there is an invoke instruction as terminator, we have to use the
+          // split-off block as predecessor.
+          if (invokeBranchBlock != nullptr) {
+            phiNode->addIncoming(symExpr, invokeBranchBlock);
+          } else {
+            phiNode->addIncoming(symExpr, symbolizedBlock);
+          }
           // if there is a constraint block, because the terminator is a switch
           // instruction, add it to the incoming blocks
           if (constraintBlock != nullptr)
@@ -1042,7 +1091,7 @@ void Symbolizer::visitInvokeInst(InvokeInst &I) {
   // target block may have multiple incoming edges (i.e., our edge may be
   // critical). In this case, we split the edge and query the return
   // expression in the new block that is specific to our edge.
-  auto *newBlock = SplitCriticalEdge(I.getParent(), I.getNormalDest());
+  auto *newBlock = SplitEdge(I.getParent(), I.getNormalDest());
   handleFunctionCall(I, newBlock != nullptr
                             ? newBlock->getFirstNonPHI()
                             : I.getNormalDest()->getFirstNonPHI());
@@ -1484,7 +1533,8 @@ CallInst *Symbolizer::createValueExpression(Value *V, IRBuilder<> &IRB) {
          IRB.getInt8(0)});
   }
 
-  llvm_unreachable("Unhandled type for constant expression");
+  // llvm_unreachable("Unhandled type for constant expression");
+  return nullptr;
 }
 
 Symbolizer::SymbolicComputation

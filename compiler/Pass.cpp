@@ -173,6 +173,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
   DT.recalculate(F);
   ///  TODO: do we still need this? Answer: right now, we do. It creates value
   ///  expressions for otherwise concrete values
+  // DEBUG(errs() << F << "\n");
   symbolizer.shortCircuitExpressionUses(symbolicMerges, DT);
   symbolizer.finalizePHINodes(symbolicMerges);
   DT.recalculate(F);
@@ -192,42 +193,43 @@ bool SymbolizePass::runOnFunction(Function &F) {
    * in following blocks. This also eliminates domination errors caused by
    * some generated symbolic merges
    **/
-  std::set<PHINode *> toRemove;
-  for (auto pair : splitData) {
-    auto blockSplitData = pair->second;
-    auto easyBlock = blockSplitData.getEasyBlock();
-    // auto str = builder.CreateGlobalStringPtr(
-    //     "easy execution of " +
-    //     blockSplitData.getCheckBlock()->getName().str() +
-    //     "\n");
-    // symbolizer.insertDebugPrint(easyBlock, str, printfFunc);
-    auto mergeBlock = blockSplitData.getMergeBlock();
-    for (auto &phi : mergeBlock->phis()) {
-      for (auto &incoming : phi.incoming_values()) {
-        if (incoming.get() == nullptr)
-          continue;
-        auto incomingInst = dyn_cast<Instruction>(incoming.get());
-        if (incomingInst == nullptr)
-          continue;
-        if (!DT.dominates(incomingInst,
-                          phi.getIncomingBlock(incoming.getOperandNo())
-                              ->getTerminator())) {
-          // errs() << *incomingInst << " doesn't dominate "
-          //        << phi.getIncomingBlock(incoming.getOperandNo())->getName()
-          //        << "\n";
-          if (phi.isSafeToRemove())
-            toRemove.insert(&phi);
+  /*   std::set<PHINode *> toRemove;
+    for (auto pair : splitData) {
+      auto blockSplitData = pair->second;
+      auto easyBlock = blockSplitData.getEasyBlock();
+      // auto str = builder.CreateGlobalStringPtr(
+      //     "easy execution of " +
+      //     blockSplitData.getCheckBlock()->getName().str() +
+      //     "\n");
+      // symbolizer.insertDebugPrint(easyBlock, str, printfFunc);
+      auto mergeBlock = blockSplitData.getMergeBlock();
+      for (auto &phi : mergeBlock->phis()) {
+        for (auto &incoming : phi.incoming_values()) {
+          if (incoming.get() == nullptr)
+            continue;
+          auto incomingInst = dyn_cast<Instruction>(incoming.get());
+          if (incomingInst == nullptr)
+            continue;
+          if (!DT.dominates(incomingInst,
+                            phi.getIncomingBlock(incoming.getOperandNo())
+                                ->getTerminator())) {
+            // errs() << *incomingInst << " doesn't dominate "
+            //        <<
+    phi.getIncomingBlock(incoming.getOperandNo())->getName()
+            //        << "\n";
+            if (phi.isSafeToRemove())
+              toRemove.insert(&phi);
+          }
         }
       }
     }
-  }
   for (auto phi : toRemove) {
     // phi->removeFromParent();
     // phi->dropAllReferences();
-  }
+  }*/
 
-  DEBUG(errs() << F << '\n');
-  verifyFunction(F, &errs());
+  // DEBUG(errs() << F << '\n');
+  // verifyFunction(F, &errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
   // errs() << "------------" << F.getName() << "------------\n";
