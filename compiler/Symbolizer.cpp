@@ -305,85 +305,8 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
   return data;
 }
 
-Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
-                                   BasicBlock *prevBlock, BasicBlock *endBlock,
-                                   SmallSet<BasicBlock *, 8> *visited,
-                                   Instruction *currentDependency,
-                                   DominatorTree &DT) {
-  // errs() << "reached " << currentBlock->getName() << "\n";
-  if (pred_size(currentBlock) > 1) {
-    // errs() << "more than 1 predecessor!\n";
-    auto newPhiNode =
-        PHINode::Create(currentDependency->getType(), pred_size(currentBlock));
-
-    for (auto *predecessor : predecessors(currentBlock)) {
-      if (predecessor == prevBlock ||
-          visited->find(predecessor) != visited->end()) {
-        newPhiNode->addIncoming(currentDependency, predecessor);
-      } else {
-        newPhiNode->addIncoming(
-            ConstantPointerNull::get(
-                IntegerType::getInt8PtrTy(currentDependency->getContext())),
-            predecessor);
-      }
-    }
-    currentBlock->getInstList().push_front(newPhiNode);
-    currentDependency = newPhiNode;
-  }
-
-  if (currentBlock == endBlock) {
-    // errs() << "reached end block\n";
-    return currentDependency;
-  }
-
-  std::set<BasicBlock *> nonLoopingSuccessors;
-  Instruction *ret = nullptr;
-
-  for (auto *successor : successors(currentBlock)) {
-    auto it = visited->find(successor);
-    if (it == visited->end()) {
-      visited->insert(successor);
-      auto result = traverseDownFromBlock(successor, currentBlock, endBlock,
-                                          visited, currentDependency, DT);
-      if (result != nullptr) {
-        // errs() << "got non null result: " << *result << "\n";
-        return result;
-      }
-      if (ret == nullptr && result != nullptr) {
-        ret = result;
-        return result;
-      }
-      assert(!(ret != nullptr && result != nullptr && ret != result) &&
-             "Found multiple paths to end block?");
-      nonLoopingSuccessors.insert(successor);
-    } else {
-      // errs() << "Skipping already visited block " << successor->getName()
-      //        << "\n";
-      continue;
-    }
-  }
-
-  /*errs() << "non looping successors for " << currentBlock->getName() << "\n";
-  for (auto *nls : nonLoopingSuccessors) {
-    errs() << nls->getName() << " ,";
-  }*/
-  // errs() << "\n";
-  if (ret != nullptr) {
-    return ret;
-  }
-  return nullptr;
-}
-
-Instruction *traverseDownFromInstruction(BasicBlock *endBlock,
-                                         Instruction *startInstruction,
-                                         DominatorTree &DT) {
-  SmallSet<BasicBlock *, 8> visited;
-  return traverseDownFromBlock(startInstruction->getParent(), nullptr, endBlock,
-                               &visited, startInstruction, DT);
-}
-
 void Symbolizer::insertBasicBlockCheck(
-    SplitData &splitData, std::list<const Value *> &dependencies,
+    SplitData &splitData, std::set<const Value *> &dependencies,
     ValueMap<Value *, Instruction *> &symbolicMerges, DominatorTree &DT) {
   auto *B = splitData.getCheckBlock();
   IRBuilder<> IRB(&*B->getFirstInsertionPt());
@@ -475,10 +398,9 @@ void Symbolizer::insertBasicBlockCheck(
         BranchInst::Create(easyBlock, symbolizedBlock, allConcrete);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   } else {
-    /// here, we don't have any nullChecks?
-    /// Does that mean there are no deps? -> no need to symbolize? most probably
-    /// not! for now, we just keep on branching to the symbolized block.
-    BranchInst *branchInst = BranchInst::Create(symbolizedBlock);
+    // no dependencies means we don't have to executed the instrumented version,
+    // just branch to the easy block
+    BranchInst *branchInst = BranchInst::Create(easyBlock);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   }
 }
@@ -613,7 +535,8 @@ void Symbolizer::finalizeTerminators(SplitData &splitData) {
 
 void Symbolizer::populateMergeBlock(
     SplitData &splitData,
-    ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges) {
+    ValueMap<llvm::Value *, llvm::Instruction *> &symbolicMerges,
+    DominatorTree &DT) {
 
   auto mergeBlock = splitData.getMergeBlock();
   auto symbolizedBlock = splitData.getSymbolizedBlock();
@@ -690,17 +613,31 @@ void Symbolizer::populateMergeBlock(
     }
   }
 
+  DT.recalculate(*mergeBlock->getParent());
+
   // replace uses of old values with new PHINodes
   for (auto value : newMappingsFromOriginal) {
     std::vector<PHINode *> replaced;
-    value->first->replaceUsesWithIf(value->second, [&](Use &U) {
-      if (U.getUser() == value->second) {
+    auto originalValue = value->first;
+    auto phiNode = value->second;
+    originalValue->replaceUsesWithIf(phiNode, [&](Use &U) {
+      // don't replace it in the phinode itself.
+      if (U.getUser() == phiNode) {
         return false;
       }
+
+      // quick check to make sure not to replace it in the symbolizedBlock and
+      // easyBlock before that.
       if (auto inst = dyn_cast<Instruction>(U.getUser())) {
         if (inst->getParent() == symbolizedBlock ||
             inst->getParent() == easyBlock)
           return false;
+
+        // if the PHINode doesn't dominate (e.g. if wasn't assinged yet), do not
+        // replace.
+        if (!DT.dominates(phiNode, U)) {
+          return false;
+        }
 
         if (auto *phi = dyn_cast<PHINode>(inst))
           replaced.push_back(phi);
@@ -710,8 +647,8 @@ void Symbolizer::populateMergeBlock(
       return true;
     });
 
-    // Fix incoming references in PHINodes
-    for (auto *user : value->second->users()) {
+    // Fix incoming references in PHINodes, so that the mergeBlock is referenced
+    for (auto *user : phiNode->users()) {
       if (auto phiNode = dyn_cast<PHINode>(user)) {
         phiNode->replaceIncomingBlockWith(symbolizedBlock, mergeBlock);
       }
@@ -719,7 +656,7 @@ void Symbolizer::populateMergeBlock(
 
     for (auto phi : replaced) {
       auto phiMap = &phiReplacements[phi];
-      phiMap->insert(std::make_pair(value.second, value.first));
+      phiMap->insert(std::make_pair(phiNode, originalValue));
       // errs() << "phi replace " << *phi << " {" << *value.second << ": "
       // << *value.first << "}\n";
     }

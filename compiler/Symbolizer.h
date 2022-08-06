@@ -157,12 +157,13 @@ public:
                                   llvm::DominatorTree &DT);
 
   void insertBasicBlockCheck(SplitData &splitData,
-                             std::list<const llvm::Value *> &dependencies,
+                             std::set<const llvm::Value *> &dependencies,
                              SymbolicMerges &symbolicMerges,
                              llvm::DominatorTree &DT);
   SplitData splitIntoBlocks(llvm::BasicBlock &B);
   void finalizeTerminators(SplitData &splitData);
-  void populateMergeBlock(SplitData &splitData, SymbolicMerges &symbolicMerges);
+  void populateMergeBlock(SplitData &splitData, SymbolicMerges &symbolicMerges,
+                          llvm::DominatorTree &DT);
 
   /// Clean up previously created PHI nodes in successors
   ///
