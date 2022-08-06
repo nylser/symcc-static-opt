@@ -92,22 +92,19 @@ bool SymbolizePass::runOnFunction(Function &F) {
   ValueMap<BasicBlock *, SplitData> splitData;
 
   for (auto basicBlock : allBasicBlocks) {
-    symbolizer.insertBasicBlockNotification(*basicBlock);
 
     // get analysis data for this basic block.
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
-    if (anaDataIt->second.empty()) {
-      // errs() << "no analysis data for: " << basicBlock->getName() << "\n";
-    } else {
-      // split into check, symbolic and concrete, as well as merge blocks
-      auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
-      splitData.insert(std::make_pair(basicBlock, blockSplitData));
-    }
+
+    // split into check, symbolic and concrete, as well as merge blocks
+    auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
+    splitData.insert(std::make_pair(basicBlock, blockSplitData));
   }
 
   // create a list of all instructions to be symbolized
   for (auto &B : allBasicBlocks) {
+    symbolizer.insertBasicBlockNotification(*B);
     auto blockSplitDataIt = splitData.find(B);
     if (blockSplitDataIt == splitData.end()) {
       for (auto &I : B->getInstList())
@@ -134,8 +131,8 @@ bool SymbolizePass::runOnFunction(Function &F) {
     assert(dependenciesIt != data->basicBlockData.end() &&
            "Dependencies for block are non-existant");
 
-    if (dependenciesIt->second.empty())
-      continue;
+    // if (dependenciesIt->second.empty())
+    //   continue;
 
     auto blockSplitDataIt = splitData.find(currentBlock);
 
@@ -154,7 +151,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     symbolizer.insertBasicBlockCheck(blockSplitData, dependenciesIt->second,
                                      symbolicMerges, DT);
-    symbolizer.populateMergeBlock(blockSplitData, symbolicMerges);
+    symbolizer.populateMergeBlock(blockSplitData, symbolicMerges, DT);
 
     symbolizer.cleanUpSuccessorPHINodes(blockSplitData, symbolicMerges);
 
@@ -225,7 +222,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     // phi->dropAllReferences();
   }
 
-  // DEBUG(errs() << F << '\n');
+  DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
