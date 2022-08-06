@@ -69,7 +69,7 @@ bool AnalyzePass::runOnModule(Module &M) {
       }
       SmallSet<Value *, 8> basicBlockDeps;
 
-      std::list<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
+      std::set<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
 
       for (Instruction &I : B) {
 
@@ -85,7 +85,7 @@ bool AnalyzePass::runOnModule(Module &M) {
           // add this load instruction to the concreteness dependencies for the
           // next block, so that we can perform the concreteness check after
           // load splitting
-          data->basicBlockData[brInst->getSuccessor(0)].push_back(loadInst);
+          data->basicBlockData[brInst->getSuccessor(0)].insert(loadInst);
           continue;
         }
 
@@ -112,7 +112,7 @@ bool AnalyzePass::runOnModule(Module &M) {
       }
 
       for (auto *topLevelDep : basicBlockTopLevelDeps) {
-        topLevelDepsList->push_back(topLevelDep);
+        topLevelDepsList->insert(topLevelDep);
         // errs() << "Dep: " << *topLevelDep << "\n";
       }
     }

@@ -21,7 +21,7 @@ class FunctionAnalysisData {
 
 public:
   FunctionAnalysisData() {}
-  std::map<llvm::BasicBlock *, std::list<const llvm::Value *>> basicBlockData;
+  std::map<llvm::BasicBlock *, std::set<const llvm::Value *>> basicBlockData;
 };
 
 class AnalyzePass : public llvm::ModulePass {
