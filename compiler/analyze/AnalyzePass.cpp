@@ -46,10 +46,10 @@ bool AnalyzePass::runOnModule(Module &M) {
   svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
   for (Function &F : M.functions()) {
     if (F.size() == 0) {
-      errs() << "skipping empty function: " << F.getName() << "\n";
+      // errs() << "skipping empty function: " << F.getName() << "\n";
       continue;
     }
-    errs() << "getting function: " << F.getName() << "\n";
+    // errs() << "getting function: " << F.getName() << "\n";
     LoopInfo &loopInfo = getAnalysis<LoopInfoWrapperPass>(F).getLoopInfo();
     FunctionAnalysisData *data = &functionAnalysisData[&F];
     for (BasicBlock &B : F)
@@ -65,7 +65,7 @@ bool AnalyzePass::runOnModule(Module &M) {
     {
       auto loop = loopInfo.getLoopFor(&B);
       if (loop != nullptr) {
-        errs() << B.getName() << " loop: " << *loop << "\n";
+        // errs() << B.getName() << " loop: " << *loop << "\n";
       }
       SmallSet<Value *, 8> basicBlockDeps;
 

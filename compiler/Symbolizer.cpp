@@ -45,8 +45,9 @@ void Symbolizer::symbolizeFunctionArguments(Function &F) {
       lastInst = IRB.CreateCall(runtime.getParameterExpression,
                                 IRB.getInt8(arg.getArgNo()));
       symbolicExpressions[&arg] = lastInst;
-      errs() << " Symbolized argument " << symbolicExpressions[&arg]->getName()
-             << "\n";
+      // errs() << " Symbolized argument " <<
+      // symbolicExpressions[&arg]->getName()
+      //        << "\n";
     }
   }
   firstEntryBlockInstruction = lastInst;
@@ -63,8 +64,8 @@ void Symbolizer::finalizePHINodes(
 
   for (auto *phi : phiNodes) {
     auto symbolicPHI = cast<PHINode>(symbolicExpressions[phi]);
-    errs() << "Finalizing" << *symbolicPHI << "\n"
-           << "With: " << *phi << "\n";
+    // errs() << "Finalizing" << *symbolicPHI << "\n"
+    //       << "With: " << *phi << "\n";
 
     // A PHI node that receives only compile-time constants can be replaced by
     // a null expression.
@@ -82,11 +83,11 @@ void Symbolizer::finalizePHINodes(
       auto origIncoming = phi->getIncomingValue(incoming);
       auto incomingReplaced = phiReplacements[phi][origIncoming];
       if (incomingReplaced == nullptr) {
-        errs() << *origIncoming << " has no phiReplacement\n";
+        // errs() << *origIncoming << " has no phiReplacement\n";
         incomingReplaced = origIncoming;
       } else {
-        errs() << "replacing: " << *origIncoming << "\n";
-        errs() << "replacement: " << *incomingReplaced << "\n";
+        // errs() << "replacing: " << *origIncoming << "\n";
+        // errs() << "replacement: " << *incomingReplaced << "\n";
       }
       auto symExpr = getSymbolicExpression(incomingReplaced);
       Value *finalExpr = symExpr;
@@ -94,7 +95,7 @@ void Symbolizer::finalizePHINodes(
         finalExpr = ConstantPointerNull::get(
             IntegerType::getInt8PtrTy(origIncoming->getContext()));
       } else {
-        errs() << "symReplacement: " << *symExpr << "\n";
+        // errs() << "symReplacement: " << *symExpr << "\n";
         auto it = symbolicMerges.find(symExpr);
         if (it != symbolicMerges.end()) {
           finalExpr = it->second;
@@ -366,7 +367,7 @@ Instruction *traverseDownFromBlock(BasicBlock *currentBlock,
   for (auto *nls : nonLoopingSuccessors) {
     errs() << nls->getName() << " ,";
   }*/
-  errs() << "\n";
+  // errs() << "\n";
   if (ret != nullptr) {
     return ret;
   }
@@ -412,7 +413,8 @@ void Symbolizer::insertBasicBlockCheck(
     if (it != symbolicMerges.end()) {
       finalExpr = it->second;
       exprInstPtr = it->second;
-      errs() << "modifying from " << *valueExpr << " to " << *finalExpr << "\n";
+      // errs() << "modifying from " << *valueExpr << " to " << *finalExpr <<
+      // "\n";
     }
 
     /**
@@ -423,8 +425,9 @@ void Symbolizer::insertBasicBlockCheck(
      * be symbolic, those might not be defined from the start?
      */
     if (B != exprInstPtr->getParent() && !DT.dominates(exprInstPtr, B)) {
-      errs() << "no domination!" << *finalExpr << " to block: " << B->getName()
-             << "\n";
+      // errs() << "no domination!" << *finalExpr << " to block: " <<
+      // B->getName()
+      //        << "\n";
       // errs() << *exprInstPtr->getParent() << "\n";
       auto phiNode = PHINode::Create(exprInstPtr->getType(), pred_size(B));
       for (auto predBlock : predecessors(B)) {
@@ -748,11 +751,11 @@ void Symbolizer::cleanUpSuccessorPHINodes(SplitData &splitData,
         phi.removeIncomingValue(idx);
       }
 
-      // if phi has the symbolic block as predecessor, 
+      // if phi has the symbolic block as predecessor,
       // fix up to be the actual predecessor, the merge block
       phi.replaceIncomingBlockWith(symBlock, mergeBlock);
 
-      // if phi node 
+      // if phi node
       for (auto &incoming : phi.incoming_values()) {
         auto it = symbolicMerges.find(incoming.get());
         if (it == symbolicMerges.end())

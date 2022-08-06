@@ -13,7 +13,7 @@ bool SplitPass::runOnModule(Module &M) {
   for (auto &F : M.functions()) {
     if (F.empty())
       continue;
-    errs() << "running split pass for function " << F.getName() << "\n";
+    // errs() << "running split pass for function " << F.getName() << "\n";
     for (auto &I : instructions(F)) {
       auto loadInst = dyn_cast<LoadInst>(&I);
       if (loadInst == nullptr)
@@ -31,5 +31,3 @@ bool SplitPass::runOnModule(Module &M) {
   }
   return true;
 };
-
-void SplitPass::getAnalysisUsage(AnalysisUsage &AU) const {}

@@ -67,7 +67,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
   if (functionName == kSymCtorName)
     return false;
 
-  errs() << "============" << functionName << "============\n";
+  // errs() << "============" << functionName << "============\n";
   // DEBUG(errs() << "Symbolizing function ");
   // DEBUG(errs().write_escaped(functionName) << '\n');
 
@@ -98,7 +98,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
     auto anaDataIt = data->basicBlockData.find(basicBlock);
     assert(anaDataIt != data->basicBlockData.end());
     if (anaDataIt->second.empty()) {
-      errs() << "no analysis data for: " << basicBlock->getName() << "\n";
+      // errs() << "no analysis data for: " << basicBlock->getName() << "\n";
     } else {
       // split into check, symbolic and concrete, as well as merge blocks
       auto blockSplitData = symbolizer.splitIntoBlocks(*basicBlock);
@@ -195,10 +195,11 @@ bool SymbolizePass::runOnFunction(Function &F) {
   for (auto pair : splitData) {
     auto blockSplitData = pair->second;
     auto easyBlock = blockSplitData.getEasyBlock();
-    auto str = builder.CreateGlobalStringPtr(
-        "easy execution of " + blockSplitData.getCheckBlock()->getName().str() +
-        "\n");
-    symbolizer.insertDebugPrint(easyBlock, str, printfFunc);
+    // auto str = builder.CreateGlobalStringPtr(
+    //     "easy execution of " +
+    //     blockSplitData.getCheckBlock()->getName().str() +
+    //     "\n");
+    // symbolizer.insertDebugPrint(easyBlock, str, printfFunc);
     auto mergeBlock = blockSplitData.getMergeBlock();
     for (auto &phi : mergeBlock->phis()) {
       for (auto &incoming : phi.incoming_values()) {
@@ -210,9 +211,9 @@ bool SymbolizePass::runOnFunction(Function &F) {
         if (!DT.dominates(incomingInst,
                           phi.getIncomingBlock(incoming.getOperandNo())
                               ->getTerminator())) {
-          errs() << *incomingInst << " doesn't dominate "
-                 << phi.getIncomingBlock(incoming.getOperandNo())->getName()
-                 << "\n";
+          // errs() << *incomingInst << " doesn't dominate "
+          //        << phi.getIncomingBlock(incoming.getOperandNo())->getName()
+          //        << "\n";
           if (phi.isSafeToRemove())
             toRemove.insert(&phi);
         }
@@ -220,14 +221,14 @@ bool SymbolizePass::runOnFunction(Function &F) {
     }
   }
   for (auto phi : toRemove) {
-    phi->removeFromParent();
-    phi->dropAllReferences();
+    // phi->removeFromParent();
+    // phi->dropAllReferences();
   }
 
   // DEBUG(errs() << F << '\n');
   verifyFunction(F, &errs());
-  // assert(!verifyFunction(F, &errs()) &&
-  //        "SymbolizePass produced invalid bitcode");
+  assert(!verifyFunction(F, &errs()) &&
+         "SymbolizePass produced invalid bitcode");
   errs() << "------------" << F.getName() << "------------\n";
   return true;
 }

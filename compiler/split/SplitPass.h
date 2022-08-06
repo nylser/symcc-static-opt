@@ -7,5 +7,4 @@ public:
   SplitPass() : ModulePass(ID) {}
 
   bool runOnModule(llvm::Module &M) override;
-  void getAnalysisUsage(llvm::AnalysisUsage &AU) const override;
 };
