@@ -85,6 +85,7 @@ bool AnalyzePass::runOnModule(Module &M) {
           // next block, so that we can perform the concreteness check after
           // load splitting
           data->basicBlockData[brInst->getSuccessor(0)].insert(&I);
+          break;
         }
 
         if (auto *storeInst = dyn_cast<StoreInst>(&I)) {
