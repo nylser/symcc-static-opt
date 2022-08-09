@@ -402,7 +402,7 @@ void Symbolizer::insertBasicBlockCheck(
   } else {
     // no dependencies means we don't have to executed the instrumented version,
     // just branch to the easy block
-    BranchInst *branchInst = BranchInst::Create(symbolizedBlock);
+    BranchInst *branchInst = BranchInst::Create(easyBlock);
     ReplaceInstWithInst(B->getTerminator(), branchInst);
   }
 }

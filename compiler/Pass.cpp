@@ -110,7 +110,8 @@ bool SymbolizePass::runOnFunction(Function &F) {
     auto blockSplitDataIt = splitData.find(B);
     if (blockSplitDataIt == splitData.end()) {
       for (auto &I : B->getInstList())
-        allInstructions.push_back(&I);
+        if (isa<LoadInst>(&I) || isa<StoreInst>(&I) || isa<CallInst>(&I))
+          allInstructions.push_back(&I);
       continue;
     }
     symbolizer.insertBasicBlockNotification(*B);
