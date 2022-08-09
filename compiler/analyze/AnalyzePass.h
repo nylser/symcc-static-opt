@@ -36,6 +36,7 @@ public:
   FunctionAnalysisData *getFunctionAnalysisData(llvm::Function &F);
 
 private:
+  static constexpr char kSymCtorName[] = "__sym_ctor";
   llvm::SmallSet<const llvm::Value *, 8>
   traversePredecessors(llvm::BasicBlock &BB, llvm::Value *Value);
 

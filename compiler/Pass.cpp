@@ -144,9 +144,9 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
     symbolizer.finalizeTerminators(blockSplitData);
 
-    for (auto *instPtr : blockSplitData.storesToInstrument) {
+    for (auto *instPtr : blockSplitData.instructionsToInstrument) {
       // errs() << "instrumenting store in easy block " << *instPtr << "\n";
-      symbolizer.visitStore(*instPtr);
+      symbolizer.visit(*instPtr);
     }
 
     // recalculate Dominator tree

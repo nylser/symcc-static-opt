@@ -45,7 +45,7 @@ bool AnalyzePass::runOnModule(Module &M) {
   SVFGBuilder svfBuilder;
   svfg = svfBuilder.buildFullSVFGWithoutOPT(ander);
   for (Function &F : M.functions()) {
-    if (F.size() == 0) {
+    if (F.size() == 0 || F.getName() == kSymCtorName) {
       // errs() << "skipping empty function: " << F.getName() << "\n";
       continue;
     }
@@ -72,21 +72,19 @@ bool AnalyzePass::runOnModule(Module &M) {
       std::set<const Value *> *topLevelDepsList = &data->basicBlockData[&B];
 
       for (Instruction &I : B) {
-
-        if (auto *loadInst = dyn_cast<LoadInst>(&I)) {
-          // load instructions are split in Symbolizer
-          auto nextInst = loadInst->getNextNode();
+        if (isa<LoadInst>(&I) || isa<CallInst>(&I)) {
+          // load and call instructions are split in Symbolizer
+          auto nextInst = I.getNextNode();
           auto brInst = dyn_cast<BranchInst>(nextInst);
           // check that load splitting actually occured.
           assert(brInst != nullptr && brInst->isUnconditional() &&
-                 "after each load instruction, there should be an "
-                 "unconditional branch instruction (load splitting)");
+                 "after each load or call instruction, there should be an "
+                 "unconditional branch instruction (change splitting)");
 
           // add this load instruction to the concreteness dependencies for the
           // next block, so that we can perform the concreteness check after
           // load splitting
-          data->basicBlockData[brInst->getSuccessor(0)].insert(loadInst);
-          continue;
+          data->basicBlockData[brInst->getSuccessor(0)].insert(&I);
         }
 
         if (auto *storeInst = dyn_cast<StoreInst>(&I)) {
@@ -103,7 +101,6 @@ bool AnalyzePass::runOnModule(Module &M) {
           basicBlockDeps.insert(U.get()); // collect all operands
         }
       }
-
       llvm::SmallSet<const Value *, 8> basicBlockTopLevelDeps;
       for (Value *Dep : basicBlockDeps) {
         auto topLevel = traversePredecessors(B, Dep);

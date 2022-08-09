@@ -55,7 +55,7 @@ public:
   llvm::BasicBlock *getSymbolizedBlock();
   llvm::BasicBlock *getMergeBlock();
   // std::map<llvm::Instruction *, llvm::BasicBlock *> callSplitBlocks;
-  std::list<llvm::StoreInst *> storesToInstrument;
+  std::list<llvm::Instruction *> instructionsToInstrument;
   llvm::ValueToValueMapTy *getVMap();
 
   /// if the easyBlock is subject block-internal splitting, we keep

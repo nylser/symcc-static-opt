@@ -276,13 +276,11 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
   assert(splitLocation != nullptr && "SplitLocation needs to exist!");
   auto symbolizedBlock = SplitBlock(&B, splitLocation);
   ValueToValueMapTy *VMap = new ValueToValueMapTy();
-  std::list<StoreInst *> storeInstructions;
+  std::list<Instruction *> instructionsToInstrument;
   auto easyBlock =
       CloneBasicBlock(symbolizedBlock, *VMap, ".easy", B.getParent());
   // updating inner references
   for (auto &inst : easyBlock->getInstList()) {
-    auto *loadInst = dyn_cast<LoadInst>(&inst);
-
     for (auto &operand : inst.operands()) {
       if (auto *value = operand.get(); value != nullptr) {
         if (auto mappedValue = VMap->find(value); mappedValue != VMap->end()) {
@@ -290,10 +288,8 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
         }
       }
     }
-    if (loadInst != nullptr)
-      visitLoadInst(*loadInst);
-    if (auto *storeInst = dyn_cast<StoreInst>(&inst)) {
-      storeInstructions.push_back(storeInst);
+    if (isa<StoreInst>(&inst) || isa<LoadInst>(&inst) || isa<CallInst>(&inst)) {
+      instructionsToInstrument.push_back(&inst);
     }
   }
 
@@ -305,9 +301,9 @@ SplitData Symbolizer::splitIntoBlocks(BasicBlock &B) {
   mergeBlock->moveAfter(symbolizedBlock);
 
   auto data = SplitData(&B, easyBlock, symbolizedBlock, mergeBlock, VMap);
-  data.storesToInstrument.insert(data.storesToInstrument.begin(),
-                                 storeInstructions.begin(),
-                                 storeInstructions.end());
+  data.instructionsToInstrument.insert(data.instructionsToInstrument.begin(),
+                                       instructionsToInstrument.begin(),
+                                       instructionsToInstrument.end());
   return data;
 }
 
