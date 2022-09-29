@@ -25,6 +25,8 @@
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
+#include <unordered_set>
+
 #include "Runtime.h"
 #include "Symbolizer.h"
 #include "analyze/AnalyzePass.h"
@@ -78,18 +80,24 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
   SmallVector<Instruction *, 0> allInstructions;
   SmallVector<BasicBlock *, 0> allBasicBlocks;
+  std::unordered_set<llvm::BasicBlock*> addBasicBlockNotification;
 
   Symbolizer symbolizer(*F.getParent());
 
   allBasicBlocks.reserve(F.getBasicBlockList().size());
   for (auto &B : F.getBasicBlockList()) {
     allBasicBlocks.push_back(&B);
+    /* Check if basic block wasn't split before */
+    const auto* pred = B.getSinglePredecessor();
+    if(!pred || pred->getSingleSuccessor() != &B)
+      addBasicBlockNotification.insert(&B);
   }
   allInstructions.reserve(F.getInstructionCount());
 
   symbolizer.symbolizeFunctionArguments(F);
 
   ValueMap<BasicBlock *, SplitData> splitData;
+
 
   for (auto basicBlock : allBasicBlocks) {
 
@@ -107,6 +115,7 @@ bool SymbolizePass::runOnFunction(Function &F) {
 
   // create a list of all instructions to be symbolized
   for (auto &B : allBasicBlocks) {
+
     auto blockSplitDataIt = splitData.find(B);
     if (blockSplitDataIt == splitData.end()) {
       for (auto &I : B->getInstList())
@@ -114,11 +123,16 @@ bool SymbolizePass::runOnFunction(Function &F) {
           allInstructions.push_back(&I);
       continue;
     }
-    symbolizer.insertBasicBlockNotification(*B);
+
+
+
+
 
     for (auto &I : blockSplitDataIt->second.getSymbolizedBlock()->getInstList())
       allInstructions.push_back(&I);
   }
+  for(auto B : addBasicBlockNotification)
+      symbolizer.insertBasicBlockNotification(*B);
 
   for (auto *instPtr : allInstructions) {
     symbolizer.visit(instPtr);
